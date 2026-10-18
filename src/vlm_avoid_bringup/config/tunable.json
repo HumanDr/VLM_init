@@ -1,0 +1,97 @@
+{
+  "_readme": [
+    "视觉避障的可调参数统一入口。改完重启 launch 生效（colcon 用了 --symlink-install，改 src 下的文件即可）。",
+    "优先级：avoidance.yaml < tunable.json < launch 参数（vlm_url / model / 话题 / enable 等）。",
+    "键名必须与节点真实参数一致，写错会被忽略——tests/test_tunable_json.py 会帮你检查拼写。",
+    "带下划线开头的键（_comment）只是注释，不会传给节点。"
+  ],
+
+  "avoidance_controller": {
+    "_comment": "决策/执行层：速度、障碍判定、时序、降级、IMU、平滑自救",
+    "publish_rate_hz": 20.0,
+
+    "max_linear": 0.45,
+    "cruise_linear": 0.35,
+    "creep_linear": 0.12,
+    "max_angular": 1.2,
+    "avoid_angular": 0.85,
+
+    "stop_distance": 0.15,
+    "slow_distance": 0.8,
+    "obstacle_distance": 0.35,
+    "release_margin": 0.25,
+    "turn_min_clearance": 0.35,
+    "side_margin": 0.12,
+    "side_push_gain": 0.6,
+    "side_push_max": 0.25,
+    "side_push_distance": 0.75,
+    "clear_path_distance": 0.55,
+
+    "_comment_lateral": "侧向避让预算：最多转多少 / 转多久，防止被模型误报带着绕圈",
+    "lateral_swerve_max_angle": 0.4363,
+    "lateral_swerve_max_time": 1.0,
+    "lateral_cooldown": 2.5,
+
+    "hold_time": 1.2,
+    "vlm_risk_tau": 2.5,
+    "unknown_risk": 0.35,
+    "obstacle_risk_threshold": 0.7,
+    "prefer_side": 1,
+
+    "vlm_stale_timeout": 3.0,
+    "stale_creep": 0.12,
+    "stop_after_stale": 6.0,
+    "sensor_timeout": 0.5,
+
+    "tilt_estop": 0.9,
+    "heading_hold": true,
+    "heading_kp": 0.9,
+    "heading_max_angular": 0.35,
+    "heading_deadband": 0.04,
+    "heading_relock": 0.6,
+
+    "smoothing_alpha": 0.45,
+    "recovery_after": 4.0,
+    "recovery_time": 2.0,
+    "recovery_angular": 0.8,
+    "recovery_linear": -0.06
+  },
+
+  "vlm_obstacle_node": {
+    "_comment": "语义通道：影响单帧耗时和判断保守程度",
+    "rate_hz": 1.5,
+    "max_side": 384,
+    "jpeg_quality": 70,
+    "timeout": 60.0,
+    "num_predict": 96,
+    "num_ctx": 4096,
+    "keep_alive": "30m",
+    "temperature": 0.0,
+    "risk_ema_alpha": 0.5,
+    "fail_publish_risk": 0.6
+  },
+
+  "depth_sectors_node": {
+    "_comment": "几何安全网：相机外参必须与真机一致，否则地面过滤会失效",
+    "max_range": 5.0,
+    "percentile": 10.0,
+    "min_valid_ratio": 0.05,
+    "stride": 2,
+    "camera_height": 0.16,
+    "camera_pitch": 0.0873,
+    "horizontal_fov": 1.2,
+    "vertical_fov": 0.0,
+    "ground_clearance": 0.06,
+    "left_band": [0.0, 0.33],
+    "center_band": [0.33, 0.67],
+    "right_band": [0.67, 1.0]
+  },
+
+  "imu_state_node": {
+    "_comment": "姿态估计：alpha 越大越信陀螺；snap_threshold 越小越容易快速识别跌倒",
+    "alpha": 0.98,
+    "snap_threshold": 0.5,
+    "rate_hz": 30.0,
+    "timeout": 0.5
+  }
+}

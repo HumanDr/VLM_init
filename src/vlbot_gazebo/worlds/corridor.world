@@ -1,0 +1,209 @@
+<?xml version="1.0"?>
+<!--
+  室内走廊 + 交错障碍物，用于验证"相机看到障碍 -> 转向避让 -> 恢复直行"。
+  走廊沿 +x 方向，宽 3.2m，长 14m；机器人从 x=0.6 出发。
+-->
+<sdf version="1.6">
+  <world name="vlbot_corridor">
+
+    <physics name="default_physics" default="true" type="ode">
+      <max_step_size>0.002</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>500</real_time_update_rate>
+    </physics>
+
+    <scene>
+      <ambient>0.45 0.45 0.48 1</ambient>
+      <background>0.65 0.72 0.78 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.95 0.95 0.92 1</diffuse>
+      <specular>0.25 0.25 0.25 1</specular>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.35 0.2 -0.92</direction>
+    </light>
+
+    <!-- 顶灯，保证相机画面亮度稳定 -->
+    <light type="point" name="ceiling_light_1">
+      <pose>3 0 2.6 0 0 0</pose>
+      <diffuse>0.8 0.8 0.75 1</diffuse>
+      <specular>0.1 0.1 0.1 1</specular>
+      <attenuation>
+        <range>12</range>
+        <constant>0.6</constant>
+        <linear>0.05</linear>
+        <quadratic>0.02</quadratic>
+      </attenuation>
+    </light>
+    <light type="point" name="ceiling_light_2">
+      <pose>9 0 2.6 0 0 0</pose>
+      <diffuse>0.8 0.8 0.75 1</diffuse>
+      <specular>0.1 0.1 0.1 1</specular>
+      <attenuation>
+        <range>12</range>
+        <constant>0.6</constant>
+        <linear>0.05</linear>
+        <quadratic>0.02</quadratic>
+      </attenuation>
+    </light>
+
+    <!-- 地面 -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>40 40</size></plane></geometry>
+          <surface>
+            <friction><ode><mu>0.8</mu><mu2>0.8</mu2></ode></friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>40 40</size></plane></geometry>
+          <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/Grey</name>
+            </script>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 走廊墙体：左 / 右 / 尽头 / 起点后墙 -->
+    <model name="wall_left">
+      <static>true</static>
+      <pose>7.0 1.7 1.0 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>14.4 0.2 2.0</size></box></geometry></collision>
+        <visual name="v">
+          <geometry><box><size>14.4 0.2 2.0</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Wood</name></script></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_right">
+      <static>true</static>
+      <pose>7.0 -1.7 1.0 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>14.4 0.2 2.0</size></box></geometry></collision>
+        <visual name="v">
+          <geometry><box><size>14.4 0.2 2.0</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Wood</name></script></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_end">
+      <static>true</static>
+      <pose>14.2 0 1.0 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.2 3.6 2.0</size></box></geometry></collision>
+        <visual name="v">
+          <geometry><box><size>0.2 3.6 2.0</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Wood</name></script></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_start">
+      <static>true</static>
+      <pose>-0.2 0 1.0 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.2 3.6 2.0</size></box></geometry></collision>
+        <visual name="v">
+          <geometry><box><size>0.2 3.6 2.0</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Wood</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 障碍 1：正中间的红箱子（最典型的“必须绕开”场景） -->
+    <model name="red_box">
+      <static>true</static>
+      <pose>3.2 0.05 0.30 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.55 0.55 0.60</size></box></geometry></collision>
+        <visual name="v">
+          <geometry><box><size>0.55 0.55 0.60</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Red</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 障碍 2：靠右的蓝色垃圾桶（考验左右判断） -->
+    <model name="blue_bin">
+      <static>true</static>
+      <pose>6.6 -0.95 0.32 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.20</radius><length>0.64</length></cylinder></geometry></collision>
+        <visual name="v">
+          <geometry><cylinder><radius>0.20</radius><length>0.64</length></cylinder></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Blue</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 障碍 3：靠左的黄色箱子 -->
+    <model name="yellow_box">
+      <static>true</static>
+      <pose>9.4 0.75 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.5 0.7 0.5</size></box></geometry></collision>
+        <visual name="v">
+          <geometry><box><size>0.5 0.7 0.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Yellow</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 障碍 4：模拟“人”（圆柱身体 + 球头），语义类障碍 -->
+    <model name="person">
+      <static>true</static>
+      <pose>12.0 -0.25 0 0 0 0</pose>
+      <link name="link">
+        <collision name="body"><pose>0 0 0.85 0 0 0</pose>
+          <geometry><cylinder><radius>0.22</radius><length>1.4</length></cylinder></geometry></collision>
+        <visual name="body_v"><pose>0 0 0.85 0 0 0</pose>
+          <geometry><cylinder><radius>0.22</radius><length>1.4</length></cylinder></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+        <collision name="head"><pose>0 0 1.65 0 0 0</pose>
+          <geometry><sphere><radius>0.16</radius></sphere></geometry></collision>
+        <visual name="head_v"><pose>0 0 1.65 0 0 0</pose>
+          <geometry><sphere><radius>0.16</radius></sphere></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 一些不会挡路的小杂物：制造视觉干扰，检验 VLM 不会误报 -->
+    <model name="small_cone_1">
+      <static>true</static>
+      <pose>1.6 1.35 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.12</radius><length>0.3</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.12</radius><length>0.3</length></cylinder></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Green</name></script></material>
+        </visual>
+      </link>
+    </model>
+    <model name="small_cone_2">
+      <static>true</static>
+      <pose>7.8 -1.4 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.12</radius><length>0.3</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.12</radius><length>0.3</length></cylinder></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Green</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>

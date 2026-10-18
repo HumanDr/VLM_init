@@ -1,0 +1,110 @@
+# 视觉避障管线参数。
+# 节点名必须与 launch 文件里的 name= 一致，否则参数不会生效。
+
+vlm_obstacle_node:
+  ros__parameters:
+    image_topic: /camera/image_raw
+    result_topic: /perception/vlm/result
+    annotated_topic: /perception/vlm/annotated
+    vlm_url: http://127.0.0.1:11434
+    api_style: ollama          # ollama | openai(vLLM/LMDeploy)
+    model: qwen2.5vl:3b        # 8GB 显存推荐 3B；7B 需 AWQ/4bit
+    rate_hz: 1.5               # 每秒最多推理几次；实际上限 = 1/单帧耗时
+    keep_alive: 30m            # 模型在显存里驻留 30 分钟，避免首帧重新加载
+    max_side: 384              # 送模型前缩放：512→384 单帧可省 ~30% 时间
+    jpeg_quality: 70
+    timeout: 60.0              # CPU 推理单帧可到 15s+，别设太小；GPU 上 60s 只是兜底
+    num_predict: 96
+    num_ctx: 4096
+    temperature: 0.0
+    risk_ema_alpha: 0.5
+    publish_debug_image: true
+    fail_publish_risk: 0.6
+
+depth_sectors_node:
+  ros__parameters:
+    depth_topic: /camera/depth/image_raw
+    result_topic: /perception/sectors/result
+    max_range: 5.0
+    percentile: 10.0
+    min_valid_ratio: 0.05
+    stride: 2
+    # 地面过滤（真机请按实际相机高度/俯角改；设为 0 可关闭）
+    camera_height: 0.16
+    camera_pitch: 0.0873     # 下俯 5 度
+    horizontal_fov: 1.20
+    vertical_fov: 0.0        # 0 = 由 hfov 与宽高比换算
+    ground_clearance: 0.06
+    left_band: [0.0, 0.33]
+    center_band: [0.33, 0.67]
+    right_band: [0.67, 1.0]
+
+imu_state_node:
+  ros__parameters:
+    imu_topic: /imu/data
+    state_topic: /state/imu
+    alpha: 0.98
+    snap_threshold: 0.5
+    rate_hz: 30.0
+    timeout: 0.5
+
+avoidance_controller:
+  ros__parameters:
+    cmd_vel_topic: /cmd_vel
+    vlm_topic: /perception/vlm/result
+    sector_topic: /perception/sectors/result
+    imu_state_topic: /state/imu
+    status_topic: /vlm_avoid/status
+    publish_rate_hz: 20.0
+    enable: true
+    require_imu: false          # 真机建议 true：IMU 不在线就不许动
+
+    # --- 速度 ---
+    max_linear: 0.45
+    cruise_linear: 0.35
+    creep_linear: 0.12
+    max_angular: 1.20
+    avoid_angular: 0.85
+
+    # --- 深度安全网 ---
+    stop_distance: 0.15
+    slow_distance: 0.80
+    obstacle_distance: 0.35
+    release_margin: 0.25
+    turn_min_clearance: 0.35
+    side_margin: 0.12
+    side_push_gain: 0.60
+    side_push_max: 0.25
+    side_push_distance: 0.75
+    clear_path_distance: 0.55
+    lateral_swerve_max_angle: 0.4363
+    lateral_swerve_max_time: 1.0
+    lateral_cooldown: 2.5
+
+    # --- 决策时序 ---
+    hold_time: 1.2
+    vlm_risk_tau: 2.5
+    unknown_risk: 0.35
+    obstacle_risk_threshold: 0.70
+    prefer_side: 1
+
+    # --- 降级 ---
+    vlm_stale_timeout: 3.0
+    stale_creep: 0.12
+    stop_after_stale: 6.0
+    sensor_timeout: 0.5
+
+    # --- IMU ---
+    tilt_estop: 0.90
+    heading_hold: true
+    heading_kp: 0.9
+    heading_max_angular: 0.35
+    heading_deadband: 0.04
+    heading_relock: 0.60
+
+    # --- 平滑与自救 ---
+    smoothing_alpha: 0.45
+    recovery_after: 4.0
+    recovery_time: 2.0
+    recovery_angular: 0.80
+    recovery_linear: -0.06
