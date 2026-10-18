@@ -28,7 +28,7 @@ bash scripts/install_gazebo.sh
 
 # ② 装 Ollama 并拉取 Qwen-VL（两种方式二选一）
 bash scripts/setup_vlm.sh              # A. 有 sudo：官方安装脚本 + systemd 服务
-bash scripts/install_ollama_noroot.sh  # B. 没 sudo：装到 .tools/ 下，不污染系统
+bash scripts/install_ollama_noroot.sh  # B. 没 sudo：装到 ~/.local/bin + ~/.ollama，任意终端可用
 
 # ③ 构建 + 跑测试（不需要 GPU，也不需要 Gazebo）
 bash scripts/build.sh
@@ -231,9 +231,10 @@ ros2 param set /vlm_obstacle_node rate_hz 2.0
 
 | 内容 | 路径 |
 |---|---|
-| Ollama 0.40.5 二进制 | `.tools/ollama/bin/ollama`（2.2 GB，sha256 已校验） |
-| 模型 `qwen2.5vl:3b` | `.tools/ollama-models`（3.2 GB） |
-| 服务 | `127.0.0.1:11434`，用 `bash scripts/ollama_serve.sh` 重启 |
+| Ollama 0.40.5 | `~/.local/bin/ollama` + `~/.local/lib/ollama/`（2.1 GB，sha256 已校验） |
+| 模型 `qwen2.5vl:3b` | `~/.ollama/models`（3.0 GB，Ollama 默认目录） |
+| 服务 | `127.0.0.1:11434`，任意终端 `ollama serve` 或用 `bash scripts/ollama_serve.sh` |
+| PATH | `~/.local/bin`（已写入 `~/.bashrc`，新终端直接 `ollama ...`） |
 
 ---
 
@@ -271,7 +272,7 @@ python3 scripts/doctor.py
 |---|---|
 | `nvidia-smi` 报错 | 驱动没装好：`ubuntu-drivers devices` → `sudo apt install nvidia-driver-XXX` → 重启；期间 Ollama 走 CPU |
 | `X Error ... GLX ... X_GLXCreateContext` | 没有可用的 GL 设备：确认 `nvidia-smi` 正常，或用集显跑 Gazebo（`__NV_PRIME_RENDER_OFFLOAD=0`），服务器上装 `xvfb` 后用 `xvfb-run` |
-| Gazebo 刷 `Read-only file system: ~/.gazebo` | HOME 不可写（容器/沙箱）：`HOME=$PWD/.tools/gz-home gzserver ...` |
+| Gazebo 刷 `Read-only file system: ~/.gazebo` | HOME 不可写（容器/沙箱）：`HOME=/tmp/gz-home gzserver ...` |
 | Gazebo 黑屏/崩溃 | 双显卡笔记本常见：`__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia gzclient`，或直接用集显跑 Gazebo（VLM 用独显） |
 | 没显示器 | `xvfb-run -a bash scripts/run_sim.sh gui:=false`（相机渲染需要 GL 上下文） |
 | VLM 一直 `stale` | `ollama list` 看模型在不在；`curl 127.0.0.1:11434/api/tags`；模型名必须和 `model` 参数一致 |

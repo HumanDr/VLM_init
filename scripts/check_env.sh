@@ -37,27 +37,23 @@ if [[ -n "${DISPLAY:-}" ]]; then ok "DISPLAY=${DISPLAY}"; else
 fi
 
 echo "===== 5. Ollama / Qwen-VL ====="
-LOCAL_OLLAMA="$PWD/.tools/ollama/bin/ollama"
-if [[ -x "$LOCAL_OLLAMA" ]]; then
-  ok "工作区内 Ollama: $("$LOCAL_OLLAMA" --version 2>/dev/null | head -1)  ($LOCAL_OLLAMA)"
+OLLAMA_BIN="$(command -v ollama 2>/dev/null || true)"
+[[ -x "$OLLAMA_BIN" ]] || OLLAMA_BIN="$HOME/.local/bin/ollama"
+if [[ -x "$OLLAMA_BIN" ]]; then
+  ok "$OLLAMA_BIN ($("$OLLAMA_BIN" --version 2>&1 | tail -1))"
+  if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    warn "~/.local/bin 不在当前 PATH（新开终端生效；或执行 source ~/.bashrc）"
+  fi
   if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
     ok "服务在线 127.0.0.1:11434"
-    echo "    已下载模型:"
-    HOME=$PWD/.tools/ollama-home OLLAMA_MODELS=$PWD/.tools/ollama-models \
-      "$LOCAL_OLLAMA" list 2>/dev/null | sed 's/^/      /'
+    echo "    已下载模型:"; "$OLLAMA_BIN" list 2>/dev/null | sed 's/^/      /'
+    echo "    推理设备  :"; "$OLLAMA_BIN" ps 2>/dev/null | sed 's/^/      /'
   else
     warn "服务未启动 → bash scripts/ollama_serve.sh"
   fi
-elif command -v ollama >/dev/null 2>&1; then
-  ok "$(ollama --version 2>/dev/null | head -1)"
-  if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
-    ok "服务在线 127.0.0.1:11434"
-    echo "    已下载模型:"; ollama list 2>/dev/null | sed 's/^/      /'
-  else
-    warn "服务未启动 → ollama serve"
-  fi
+  [[ -d "$HOME/.ollama/models" ]] && ok "模型目录 ~/.ollama/models" || warn "~/.ollama/models 不存在"
 else
-  bad "未安装 ollama → bash scripts/setup_vlm.sh（有 sudo）或 scripts/install_ollama_noroot.sh"
+  bad "未安装 ollama → bash scripts/install_ollama_noroot.sh（无需 sudo）"
 fi
 
 echo "===== 6. Python 依赖 ====="

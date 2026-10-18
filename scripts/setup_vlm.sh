@@ -7,11 +7,11 @@
 set -eo pipefail
 
 MODEL=${1:-qwen2.5vl:3b}
-if [[ -x "$PWD/.tools/ollama/bin/ollama" ]]; then
-  echo "检测到工作区内已有一份 Ollama（无需 sudo 的那份）。"
-  echo "如需用它拉模型/起服务，请改用: bash scripts/install_ollama_noroot.sh ${MODEL}"
-  echo "继续执行会再装一份 system-wide 的 Ollama（两者不冲突，但没必要）。"
-  read -r -p "继续？[y/N] " ans
+if command -v ollama >/dev/null 2>&1; then
+  echo "检测到已安装 Ollama: $(command -v ollama)"
+  echo "如果只是想拉模型/起服务，直接用它即可，不必再装 system-wide 版："
+  echo "  bash scripts/ollama_serve.sh && ollama pull ${MODEL}"
+  read -r -p "仍要继续安装 system-wide 版？[y/N] " ans
   [[ "${ans:-N}" =~ ^[Yy]$ ]] || exit 0
 fi
 OLLAMA_URL=${OLLAMA_URL:-http://127.0.0.1:11434}

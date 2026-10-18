@@ -67,15 +67,24 @@ bash scripts/setup_vlm.sh qwen2.5vl:7b     # 8GB 勉强（~6.5GB），别同时�
 ### 没有 sudo 密码？装到用户目录
 
 ```bash
-bash scripts/install_ollama_noroot.sh   # 装到 .tools/ollama，模型存 .tools/ollama-models
-bash scripts/ollama.sh list             # 用这份二进制
-bash scripts/ollama_serve.sh            # 后台起服务
+bash scripts/install_ollama_noroot.sh   # 装进 ~/.local，模型进 ~/.ollama/models
+ollama list                             # 新终端直接可用（PATH 已写入 ~/.bashrc）
+bash scripts/ollama_serve.sh            # 后台起服务（幂等）
 ```
 
-原理：下载 `ollama-linux-amd64.tar.zst` → 解压到 `.tools/ollama` →
-用 `OLLAMA_MODELS` 指定模型目录 → 直接跑 `bin/ollama serve`。
-脚本会用官方 `sha256sum.txt` **强制校验**（当前版本 v0.40.5，
-sha256 `dc5eabc2…2169c`）。
+安装位置都是**标准用户目录**，和本仓库无关：
+
+| 内容 | 路径 |
+|---|---|
+| 二进制 | `~/.local/bin/ollama` |
+| 运行库 | `~/.local/lib/ollama/` |
+| 模型 | `~/.ollama/models/`（Ollama 默认目录，不需要设 `OLLAMA_MODELS`） |
+| 日志 / pid | `~/.ollama/serve.log`、`~/.ollama/serve.pid` |
+
+原理：下载 `ollama-linux-amd64.tar.zst` → 解压到 `~/.local` → `bin/ollama` 会自己
+找到 `../lib/ollama` 下的运行库。脚本会用官方 `sha256sum.txt` **强制校验**
+（当前版本 v0.40.5，sha256 `dc5eabc2…2169c`），并幂等地把 `~/.local/bin`
+写进 `~/.bashrc` 的 PATH。
 
 ### Ollama 需要可写的 HOME
 
@@ -89,9 +98,9 @@ Error: could not create directory mkdir /home/xxx/.ollama: read-only file system
 解决：把 HOME 指到可写目录（模型目录单独用 `OLLAMA_MODELS` 指定）：
 
 ```bash
-mkdir -p .tools/ollama-home
-HOME=$PWD/.tools/ollama-home OLLAMA_MODELS=$PWD/.tools/ollama-models \
-  .tools/ollama/bin/ollama serve
+mkdir -p /tmp/ollama-home
+HOME=/tmp/ollama-home OLLAMA_MODELS=/tmp/ollama-models \
+  ~/.local/bin/ollama serve
 ```
 
 正常桌面机器不需要这一步。

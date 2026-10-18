@@ -1,29 +1,33 @@
 #!/usr/bin/env bash
-# 后台启动工作区内的 Ollama 服务（幂等）。
+# 后台启动 Ollama 服务（幂等）。二进制和模型都在用户目录，与工作区无关。
+#
+#   bash scripts/ollama_serve.sh
 set -eo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
-export OLLAMA_MODELS="$PWD/.tools/ollama-models"
-BIN="$PWD/.tools/ollama/bin/ollama"
-LOG="$PWD/.tools/ollama-serve.log"
+
+BIN="${OLLAMA_BIN:-$(command -v ollama 2>/dev/null || true)}"
+[[ -x "$BIN" ]] || BIN="$HOME/.local/bin/ollama"
+LOG="$HOME/.ollama/serve.log"
+PIDFILE="$HOME/.ollama/serve.pid"
 
 if [[ ! -x "$BIN" ]]; then
-  echo "未找到 $BIN，先执行: bash scripts/install_ollama_noroot.sh" >&2
+  echo "未找到 ollama，先执行: bash scripts/install_ollama_noroot.sh" >&2
   exit 1
 fi
 if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
-  echo "服务已在运行"
+  echo "服务已在运行（11434）"
   exit 0
 fi
+mkdir -p "$HOME/.ollama"
 nohup "$BIN" serve >"$LOG" 2>&1 &
-echo $! > "$PWD/.tools/ollama.pid"
+echo $! > "$PIDFILE"
 for _ in $(seq 1 30); do
   sleep 1
   if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
-    echo "✓ 已启动 (pid $(cat "$PWD/.tools/ollama.pid"))，日志 $LOG"
+    echo "✓ 已启动 (pid $(cat "$PIDFILE"))，日志 $LOG"
     echo
-    echo "确认推理设备（PROCESSOR 列显示 100% GPU / 100% CPU）："
-    echo "  bash scripts/ollama.sh run qwen2.5vl:3b '说一句你好'   # 先热身，加载模型"
-    echo "  bash scripts/ollama.sh ps"
+    echo "确认推理设备（PROCESSOR 列应为 100% GPU）："
+    echo "  ollama run qwen2.5vl:3b '说一句你好'   # 先热身，加载模型"
+    echo "  ollama ps"
     exit 0
   fi
 done
