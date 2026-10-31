@@ -40,7 +40,19 @@
 
 注意最后一条：**失败也要发布**。下游必须能区分"真的通畅"和"我不知道"。
 
-### 2.2 深度通道（几何）
+### 2.2 深度 + 激光雷达（几何双通道）
+
+| | 深度相机 | 激光雷达 |
+|---|---|---|
+| 视场 | 水平约 68°（1.2 rad） | **360°** |
+| 高度 | 能看到地面与低矮物体 | 单平面（0.21 m），看不到矮台阶 |
+| 抗干扰 | 受光照/纹理影响 | 不受光照影响 |
+| 用途 | 前方三维净空、地面过滤 | 侧后方全向防撞、贴墙判断 |
+
+两者都经 `compute_sectors / compute_scan_sectors` 转成同构的 `SectorScan`，
+控制器逐项取 **min**：谁更保守听谁的。任一路失效只是少一个约束，不会让车"看不见"。
+
+### 2.3 深度通道（几何）
 
 深度图按列切三个扇区（0–33%、33–67%、67–100%），对每扇区取有效像素的 **10 分位**距离：
 
@@ -69,7 +81,7 @@ height  = camera_height - depth · sin(beta)       该点离地高度
 替换参数：`camera_height`、`camera_pitch`、`horizontal_fov`（`vertical_fov` 默认由 hfov 与
 宽高比换算）、`ground_clearance`。单测 `test_floor_filtering_recovers_obstacle` 守着这个行为。
 
-### 2.3 IMU 通道（状态估计）
+### 2.4 IMU 通道（状态估计）
 
 互补滤波：`angle = α(angle + ω·dt) + (1-α)·angle_acc`，α=0.98，分别对 roll/pitch 做。
 yaw 只靠陀螺积分（无磁力计），并在静止时估计零偏，因此**只用于短时航向保持**，不用于定位。
@@ -141,6 +153,101 @@ yaw 只靠陀螺积分（无磁力计），并在静止时估计零偏，因此*
 VLM 1 Hz + 随机性 → 相邻两帧可能给出相反判断。没有 hold_time 时，机器人会
 "转一下—回正—再转一下"，在窄通道里表现为画龙。hold_time=1.2 s 让一次避障至少执行
 1.2 s，等于给了底盘完成转向的时间。代价是反应略迟钝，可以用 `avoid_angular` 补偿。
+
+### 3.5 目的地导航（goto 模式）
+
+控制器订阅 `/goal_pose` 与 `/odom`，用里程计算：
+
+```
+dx, dy  = 目标 - 当前位置
+dist    = hypot(dx, dy)
+bearing = wrap(atan2(dy, dx) - 当前朝向)
+```
+
+规划器在**没有障碍**时进入 `GOTO`：
+
+```
+ω = clamp(goal_kp · bearing, ±goal_max_angular)
+align    = max(0, 1 - |bearing| / goal_slow_angle)      # 角度大就先原地转
+approach = min(1, max(0.25, dist / goal_slow_radius))   # 近了减速
+v = cap · align · approach
+```
+
+`dist ≤ goal_tolerance` 时输出 `ARRIVED` 并停车。
+
+**避障始终优先**：一旦检测到障碍，状态机照常进入 `AVOID_*` / `STOP`，
+障碍解除后自动回到 `GOTO`。所以它是"朝着目标走、遇事自己绕"，不是全局路径规划——
+目标在隔墙后面时会卡在墙前（需要 Nav2/SLAM 才有真全局规划）。
+
+### 3.6 A* 全局路径（解决"墙后面到不了"）
+
+`GOTO` 只是"朝目标直着走 + 本地绕障"，目标在墙后就会顶着墙蹭。所以加了一层全局规划：
+
+```mermaid
+flowchart LR
+  W["warehouse.world"] -->|make_map_from_world.py| J["warehouse_map.json<br/>栅格 + origin + 分辨率"]
+  J --> I["膨胀 inflation_radius"]
+  I --> A["A* (8 邻域 / octile / 禁止切角)"]
+  A --> S["视线平滑"]
+  S --> P["/plan（odom 系）"]
+  P --> C["控制器逐点跟随"]
+```
+
+**地图从哪来**：`scripts/make_map_from_world.py` 解析 SDF，把静态模型的
+`box/cylinder/sphere` 碰撞体栅格化（0.1 m/格）。`plane`（地面）和"只有 visual
+没有 collision"的模型（目标点标记）不会进图——这一点和激光雷达看到的一致。
+
+**坐标怎么对齐**：地图是世界坐标，而 `/odom` 从出生点算起。节点用
+`map_offset_x/y`（= 出生点世界坐标，launch 自动从 `x:=`/`y:=` 传入）做平移，
+发布出去的 `/plan` 已经在 odom 系。
+
+**膨胀**：按机器人半径 + 余量（默认 0.28 m）做圆形膨胀，而不是方形，避免把窄通道堵死。
+
+**A\***：8 邻域，直走 1、斜走 √2，octile 启发；斜向移动时要求两个正交邻居都空
+（禁止"切角"穿过两个障碍的接缝）；起点/终点落在障碍里时先吸附到最近空格。
+
+**平滑**：贪心视线法（能直连就跳过中间点），把几十个格子压成 4~6 个路点。
+
+**跟随**：控制器订阅 `/plan`，每 50 ms 取"第一个距自己超过 `waypoint_tolerance`（0.35 m）
+的路点"作为当前目标；到达判定仍然用**最终目标**的距离。本地避障始终优先——
+路上有障碍照常 `AVOID/STOP`，解除后回到路径。
+
+**重规划**：收到新目标立即重算，之后每 `replan_period`（2 s）按当前位置重算一次
+（成本很低：276x196 栅格，一次 A* 约几十毫秒）。
+
+**局限**：地图是静态的。运行中新出现的障碍（比如移动的人）只能靠本地避障躲，
+A* 不会为它改路线。要做动态规划，得把激光雷达接进代价地图并标记脏区。
+
+### 3.7 定位与坐标系（地图为什么会对不上）
+
+仿真里最容易踩的坑：**RViz 里的车和 Gazebo 里的车越走越偏，A* 路径看着穿墙**。
+
+原因不是地图画错了，而是**位姿来源**：
+
+| 来源 | 精度 | 问题 |
+|---|---|---|
+| 差速插件（轮式里程计） | 靠轮速积分 | 撞墙、打滑、被推一下就漂，越走越偏 |
+| `gazebo_ros_p3d`（真值） | 精确 | 只发 Odometry，不发 TF |
+
+所以现在的接法是：
+
+```
+gazebo_ros_p3d ──/ground_truth/odom──► ground_truth_odom ──/odom + TF(odom→base_footprint)──► 控制器/A*/rviz
+diff_drive     ──/wheel_odom──────────► 只用于打印漂移，不参与控制
+```
+
+`ground_truth_odom` 把世界坐标换算成"相对出生点"的 odom 坐标：
+
+```
+local = R(-origin_yaw) · (world - origin)
+```
+
+`origin` 就是出生点（launch 的 `x:=`/`y:=`/`yaw:=`），所以 `map_offset_x/y` 保持不变、
+地图与 Gazebo 严格对齐。节点每 5 秒打印一次轮式里程计的漂移量——真机上这个差值
+就是需要 SLAM/AMCL 修正的部分。
+
+> 真机没有真值：要么用 `robot_localization` 的 EKF（轮速 + IMU），
+> 要么用 SLAM/AMCL 把 `/odom` 修正到 `/map`。本项目的接口不变，替换位姿来源即可。
 
 ## 4. 执行层
 

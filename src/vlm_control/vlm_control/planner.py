@@ -56,6 +56,14 @@ class PlannerParams:
     unknown_risk: float = 0.35
     obstacle_risk_threshold: float = 0.70
     prefer_side: int = 1
+    # --- 目的地导航（goto 模式） ---
+    goal_tolerance: float = 0.30        # 到目标多近算"到达"
+    goal_kp: float = 1.40               # 航向误差 -> 角速度 的比例增益
+    goal_max_angular: float = 0.90      # goto 时的角速度上限
+    goal_slow_angle: float = 0.90       # 航向误差超过它就不前进（先原地转）
+    goal_slow_radius: float = 1.20      # 距目标多远开始减速
+    stuck_recovery_time: float = 1.4    # 卡住后倒退转向持续多久
+    stuck_cooldown: float = 4.0         # 两次自救的最小间隔
     # --- 降级 ---
     vlm_stale_timeout: float = 3.0
     stale_creep: float = 0.12
@@ -98,6 +106,11 @@ class PlannerInputs:
     roll: float = 0.0
     pitch: float = 0.0
     yaw: float = 0.0
+    # 目的地导航：mode='goto' 时由控制器从 /odom 算出这两个量
+    mode: str = 'cruise'
+    stuck: bool = False
+    goal_dist: float = 0.0
+    goal_bearing: float = 0.0     # wrap(目标方位 - 当前朝向)，rad
 
 
 @dataclass
@@ -128,6 +141,8 @@ class ReactivePlanner:
         self._commit_until = 0.0
         self._stop_since: Optional[float] = None
         self._recovery_until = 0.0
+        self._stuck_until = 0.0
+        self._stuck_last = -1e9
         self._first_sense_time: Optional[float] = None
         self._cmded = False
         self._near = False
@@ -268,6 +283,25 @@ class ReactivePlanner:
                 return self._emit(inp, 0.0, 0.0, 'STOP', risk, inp.center, 0.0,
                                   '感知长时间不可用', degraded=True)
 
+        # ---------- 1b. 目的地：先判到达 ----------
+        if inp.mode == 'goto' and inp.goal_dist <= p.goal_tolerance:
+            self._stop_since = None
+            self._commit_side = 0
+            return self._emit(inp, 0.0, 0.0, 'ARRIVED', risk, inp.center, 1.0,
+                              f'已到达目标点（{inp.goal_dist:.2f} m）',
+                              degraded=degraded)
+
+        # ---------- 1c. 卡住自救：朝目标走但长时间没位移 ----------
+        if inp.mode == 'goto' and inp.stuck:
+            if now >= self._stuck_until and now - self._stuck_last >= p.stuck_cooldown:
+                self._stuck_last = now
+                self._stuck_until = now + p.stuck_recovery_time
+        if inp.mode == 'goto' and now < self._stuck_until:
+            side = int(math.copysign(1, p.prefer_side)) if p.prefer_side else 1
+            return self._emit(inp, p.recovery_linear, side * p.recovery_angular,
+                              'RECOVERY', risk, inp.center, 1.0,
+                              '卡住自救：倒退转向', degraded=degraded)
+
         # ---------- 2. 速度上限 ----------
         cap = p.cruise_linear
         if has_depth:
@@ -334,13 +368,23 @@ class ReactivePlanner:
                                   side_r * p.recovery_angular, 'RECOVERY',
                                   risk, inp.center, 1.0, '卡死自救',
                                   degraded=degraded)
+        elif inp.mode == 'goto':
+            # 朝目标点走：航向误差 -> 角速度；角度大时先原地转，近了减速
+            err = inp.goal_bearing
+            angular = clamp(p.goal_kp * err, -p.goal_max_angular, p.goal_max_angular)
+            align = max(0.0, 1.0 - abs(err) / max(1e-3, p.goal_slow_angle))
+            approach = min(1.0, max(0.25, inp.goal_dist / max(0.1, p.goal_slow_radius)))
+            linear = cap * align * approach
+            state = 'GOTO'
+            self._stop_since = None
         else:
             linear = cap
             state = 'CRUISE' if risk < 0.15 else 'CAUTION'
             self._stop_since = None
 
         # ---------- 6. IMU 航向保持（只在直行时生效） ----------
-        if state in ('CRUISE', 'CAUTION') and p.heading_hold and inp.imu_valid:
+        if (state in ('CRUISE', 'CAUTION') and p.heading_hold
+                and inp.imu_valid and inp.mode != 'goto'):
             if self._last_state in ('AVOID_LEFT', 'AVOID_RIGHT'):
                 self._target_yaw = inp.yaw        # 避障结束后重新锁定，别把车头掰回去
             if self._target_yaw is None:
@@ -355,6 +399,7 @@ class ReactivePlanner:
 
         # ---------- 6b. 侧向净空推离：贴墙时把车头推回通道中线 ----------
         if (state in ('CRUISE', 'CAUTION') and has_depth
+                and inp.mode != 'goto'
                 and p.side_push_gain > 0.0 and min(inp.left, inp.right) < p.side_push_distance):
             push = p.side_push_gain * (inp.left - inp.right) / max(1e-3, inp.left + inp.right)
             push = clamp(push, -p.side_push_max, p.side_push_max)
@@ -364,13 +409,14 @@ class ReactivePlanner:
         if not self._cmded:
             smooth_lin, smooth_ang = linear, angular
             self._cmded = True
-        elif state in ('STOP', 'RECOVERY', 'ESTOP'):
+        elif state in ('STOP', 'RECOVERY', 'ESTOP', 'ARRIVED'):
             smooth_lin, smooth_ang = linear, angular
         else:
             a = clamp(p.smoothing_alpha, 0.0, 1.0)
             smooth_lin = a * linear + (1.0 - a) * self._prev_linear
             smooth_ang = a * angular + (1.0 - a) * self._prev_angular
-        if self._last_state in ('AVOID_LEFT', 'AVOID_RIGHT') and state in ('CRUISE', 'CAUTION'):
+        if (self._last_state in ('AVOID_LEFT', 'AVOID_RIGHT')
+                and state in ('CRUISE', 'CAUTION', 'GOTO')):
             smooth_ang = angular            # 避让结束立刻把方向交还航向保持，避免过冲
         smooth_lin = clamp(smooth_lin, -p.max_linear, p.max_linear)
         smooth_ang = clamp(smooth_ang, -p.max_angular, p.max_angular)

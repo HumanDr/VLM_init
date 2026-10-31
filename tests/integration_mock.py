@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import signal
 import socket
@@ -33,7 +34,8 @@ from ros_bootstrap import ensure_env  # noqa: E402
 ensure_env()
 
 import rclpy  # noqa: E402
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import PoseStamped, Twist
+from nav_msgs.msg import Odometry, Path
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
@@ -52,12 +54,23 @@ class Probe(Node):
         self.cmds: list[tuple[float, float, float]] = []
         self.states: list[tuple[float, str, float, bool]] = []
         self.sectors: list[tuple[float, float, float, float, bool]] = []
+        self.scan_sectors: list[tuple[float, float, float, float, bool]] = []
+        self.plans: list[tuple[float, list]] = []
         self.annotated = 0
         self._pub_scene = self.create_publisher(String, '/test/scene', 10)
+        self._pub_odom = self.create_publisher(Odometry, '/odom', 10)
+        self._pub_goal = self.create_publisher(PoseStamped, '/goal_pose', 10)
         self.create_subscription(Twist, '/cmd_vel', self._on_cmd, 10)
         self.create_subscription(DriveStatus, '/vlm_avoid/status', self._on_status, 10)
         self.create_subscription(SectorScan, '/perception/sectors/result',
                                  self._on_sector, 10)
+        self.create_subscription(
+            Path, '/plan',
+            lambda m: self.plans.append(
+                (time.monotonic(),
+                 [(p.pose.position.x, p.pose.position.y) for p in m.poses])), 10)
+        self.create_subscription(SectorScan, '/perception/scan_sectors',
+                                 self._on_scan_sector, 10)
         self.create_subscription(Image, '/perception/vlm/annotated',
                                  self._on_image, 2)
 
@@ -65,11 +78,16 @@ class Probe(Node):
         self.cmds.append((time.monotonic(), msg.linear.x, msg.angular.z))
 
     def _on_status(self, msg: DriveStatus) -> None:
-        self.states.append((time.monotonic(), msg.state, msg.risk, msg.vlm_stale))
+        self.states.append((time.monotonic(), msg.state, msg.risk, msg.vlm_stale,
+                            msg.distance_to_goal))
 
     def _on_sector(self, msg: SectorScan) -> None:
         self.sectors.append((time.monotonic(), msg.center, msg.left, msg.right,
                              msg.valid))
+
+    def _on_scan_sector(self, msg: SectorScan) -> None:
+        self.scan_sectors.append((time.monotonic(), msg.center, msg.left, msg.right,
+                                  msg.valid))
 
     def _on_image(self, _msg: Image) -> None:
         self.annotated += 1
@@ -77,12 +95,35 @@ class Probe(Node):
     def set_scene(self, scene: str) -> None:
         self._pub_scene.publish(String(data=scene))
 
+    def publish_odom(self, x: float = 0.0, y: float = 0.0, yaw: float = 0.0) -> None:
+        """假里程计：控制器靠它算目标距离"""
+        m = Odometry()
+        m.header.stamp = self.get_clock().now().to_msg()
+        m.header.frame_id = 'odom'
+        m.child_frame_id = 'base_footprint'
+        m.pose.pose.position.x = float(x)
+        m.pose.pose.position.y = float(y)
+        m.pose.pose.orientation.z = math.sin(yaw / 2.0)
+        m.pose.pose.orientation.w = math.cos(yaw / 2.0)
+        self._pub_odom.publish(m)
 
-def spin_for(node: Node, probe: Probe, seconds: float, scene: str | None) -> None:
+    def send_goal(self, x: float, y: float) -> None:
+        m = PoseStamped()
+        m.header.stamp = self.get_clock().now().to_msg()
+        m.header.frame_id = 'odom'
+        m.pose.position.x = float(x)
+        m.pose.position.y = float(y)
+        m.pose.orientation.w = 1.0
+        self._pub_goal.publish(m)
+
+
+def spin_for(node: Node, probe: Probe, seconds: float, scene: str | None,
+             odom: tuple[float, float, float] = (0.0, 0.0, 0.0)) -> None:
     t_end = time.monotonic() + seconds
     while time.monotonic() < t_end:
         if scene is not None:
             probe.set_scene(scene)
+        probe.publish_odom(*odom)
         rclpy.spin_once(probe, timeout_sec=0.02)
 
 
@@ -199,6 +240,11 @@ def main(argv=None) -> int:
               '深度扇区识别出前方 ~0.30m 障碍',
               f'深度扇区异常: {[(round(s[1], 2)) for s in recent[:5]]}')
 
+        recent_scan = [s for s in probe.scan_sectors if s[0] >= t0 and s[4]]
+        check(bool(recent_scan) and any(abs(s[1] - 0.30) < 0.15 for s in recent_scan),
+              '激光雷达扇区同样识别出 ~0.30m 障碍',
+              f'雷达扇区异常: {[(round(s[1], 2)) for s in recent_scan[:5]]}')
+
         print('[4/6] 视野恢复：应回到巡航')
         t0 = time.monotonic()
         spin_for(node, probe, 4.0, 'free')
@@ -227,11 +273,57 @@ def main(argv=None) -> int:
         cmds, states = window(probe, t0 + 4.0, time.monotonic())
         check(any(s[3] for s in states), 'status 中 vlm_stale=True',
               '未检测到 stale 标记')
-        check(bool(cmds) and max((c[1] for c in cmds), default=9.9) <= 0.26,
+        check(bool(cmds) and max((c[1] for c in cmds), default=9.9) <= 0.52,   # 巡航 0.70 的 75%
               f'降级后限速 v<={max((c[1] for c in cmds), default=0):.2f}',
               f'降级后仍在满速: {max((c[1] for c in cmds), default=0):.2f}')
         check(probe.annotated > 0, f'调试叠加图已发布（{probe.annotated} 帧）',
               '没有收到 annotated 图像')
+
+        print('[7/7] 目的地导航：给一个左侧目标，应转向并进入 GOTO')
+        probe.send_goal(0.0, 3.0)          # 起点 (0,0) 朝 +x，目标在左前方 90°
+        t0 = time.monotonic()
+        spin_for(node, probe, 4.0, 'free', odom=(0.0, 0.0, 0.0))
+        cmds, states = window(probe, t0 + 1.0, time.monotonic())
+        states_txt = sorted({s[1] for s in states})
+        check('GOTO' in states_txt, f'进入 GOTO 状态 {states_txt}',
+              f'未进入 GOTO: {states_txt}')
+        w = [c[2] for c in cmds]
+        check(bool(w) and max(w) > 0.5, f'朝目标左转 w={max(w, default=0):+.2f}',
+              f'转向不正确: {w[:5]}')
+        st = probe.states[-1] if probe.states else None
+        check(st is not None and 2.5 < st[4] < 3.5,
+              f'距离目标 {st[4]:.2f} m' if st else '无状态',
+              'distance_to_goal 不正确')
+        # 再给一个"就在脚下"的目标，应进入 ARRIVED 并停车
+        probe.send_goal(0.1, 0.0)
+        t0 = time.monotonic()
+        spin_for(node, probe, 3.0, 'free', odom=(0.0, 0.0, 0.0))
+        cmds, states = window(probe, t0 + 1.5, time.monotonic())
+        check(any(s[1] == 'ARRIVED' for s in states), '到达目标后进入 ARRIVED',
+              f'未到达: {sorted({s[1] for s in states})}')
+        check(bool(cmds) and max(abs(c[1]) + abs(c[2]) for c in cmds) < 1e-6,
+              'ARRIVED 后速度归零', 'ARRIVED 后仍有速度')
+
+        print('[8/8] A* 绕墙：目标在墙 A 后面（odom 20.5,0 -> 世界 22,1.5）')
+        t0 = time.monotonic()
+        probe.send_goal(20.5, 0.0)
+        spin_for(node, probe, 6.0, 'free', odom=(0.0, 0.0, 0.0))
+        plans = [p for p in probe.plans if p[0] >= t0]
+        n_wp = len(plans[-1][1]) if plans else 0
+        check(n_wp >= 3, f'收到 A* 路径（{n_wp} 个路点）', '没有收到 /plan')
+        north = max((y for _t, pts in plans for _x, y in pts), default=-99.0)
+        check(north > 0.5, f'路径向北绕行（最北 y={north:.2f}m）',
+              f'路径没有绕墙（最北 y={north:.2f}）')
+        cmds, states = window(probe, t0 + 1.0, time.monotonic())
+        check('GOTO' in {s[1] for s in states},
+              '处于 GOTO 状态', f'状态异常: {sorted({s[1] for s in states})}')
+        w = [c[2] for c in cmds]
+        # 目标正东（直线航向 0），而路径先向东北 -> 角速度应为正但不大（斜切约 0.11 rad）
+        check(bool(w) and max(w) > 0.08,
+              f'朝第一段路点转向（w={max(w, default=0):+.2f}，直线目标本应为 0）',
+              f'没有朝路点转向: w={w[:5]}')
+        check(bool(w) and min(w) > -0.05,
+              '全程没有朝反方向打舵', f'出现反向角速度: {min(w, default=0):+.2f}')
 
     finally:
         if args.keep:

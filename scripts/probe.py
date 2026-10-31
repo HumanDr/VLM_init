@@ -55,8 +55,8 @@ def main() -> int:
 
     rclpy.init()
     node = Probe()
-    print('时间    状态       风险  净空   v(m/s)  w(rad/s)  VLM判断')
-    print('-' * 92)
+    print('时间    状态       风险  净空   v(m/s)  w(rad/s)  目标    VLM判断')
+    print('-' * 100)
     empty_since = time.monotonic()
     hinted = False
     t0 = time.monotonic()
@@ -73,12 +73,15 @@ def main() -> int:
                     vtxt = (f"{'障碍' if v.obstacle else '通畅'} risk={v.risk:.2f} "
                             f"{v.direction}/{v.action} {v.latency_ms:.0f}ms"
                             f"{' STALE' if v.stale else ''} age={age:.0f}s")
+                goal = (f'{s.distance_to_goal:.2f}m'
+                        if s is not None and s.distance_to_goal >= 0 else '-')
                 print(f'{time.strftime("%H:%M:%S")} '
                       f'{(s.state if s else "-"):<10} '
                       f'{(s.risk if s else 0):.2f}  '
                       f'{(s.clearance_center if s else 0):.2f}  '
                       f'{(c.linear.x if c else 0):+.2f}   '
-                      f'{(c.angular.z if c else 0):+.2f}    {vtxt}')
+                      f'{(c.angular.z if c else 0):+.2f}    '
+                      f'{goal:<7} {vtxt}')
                 if node.status is None and not hinted and time.monotonic() - empty_since > 6:
                     hinted = True
                     print('  (还没收到 /vlm_avoid/status —— 管线没启动？'

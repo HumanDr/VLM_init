@@ -77,6 +77,42 @@ def generate_launch_description() -> LaunchDescription:
         }],
     )
 
+    scan_node = Node(
+        package='vlm_perception',
+        executable='scan_sectors_node',
+        name='scan_sectors_node',
+        output='screen',
+        parameters=node_params('scan_sectors_node') + [{
+            'scan_topic': LaunchConfiguration('scan_topic'),
+        }],
+    )
+
+    slam_node = Node(
+        package='vlm_control',
+        executable='slam_node',
+        name='slam_node',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('enable_slam')),
+        parameters=node_params('slam_node'),
+    )
+
+    planner_node = Node(
+        package='vlm_control',
+        executable='path_planner_node',
+        name='path_planner_node',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('enable_planner')),
+        parameters=node_params('path_planner_node') + [{
+            'map_source': LaunchConfiguration('map_source'),
+            'frame_id': LaunchConfiguration('plan_frame'),
+            'map_file': LaunchConfiguration('map_file'),
+            'map_offset_x': ParameterValue(LaunchConfiguration('spawn_x'),
+                                           value_type=float),
+            'map_offset_y': ParameterValue(LaunchConfiguration('spawn_y'),
+                                           value_type=float),
+        }],
+    )
+
     imu_node = Node(
         package='vlm_control',
         executable='imu_state_node',
@@ -114,11 +150,32 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('vlm_model', default_value='qwen2.5vl:3b'),
         DeclareLaunchArgument('image_topic', default_value='/camera/image_raw'),
         DeclareLaunchArgument('depth_topic', default_value='/camera/depth/image_raw'),
+        DeclareLaunchArgument('enable_slam', default_value='false',
+                              description='启动激光+IMU+轮速+RGB-D 的 SLAM，用来修里程计漂移'),
+        DeclareLaunchArgument('odom_topic', default_value='/odom',
+                              description='位姿来源：SLAM 模式传 /slam/odom'),
+        DeclareLaunchArgument('plan_frame', default_value='odom',
+                              description='路径/地图的坐标系：RTAB-Map 模式传 map'),
+        DeclareLaunchArgument('map_source', default_value='file',
+                              description="A* 地图来源：file=离线地图 / topic=SLAM 实时 /map"),
+        DeclareLaunchArgument('enable_planner', default_value='true',
+                              description='A* 全局规划；关掉则退化为直线奔向目标'),
+        DeclareLaunchArgument(
+            'map_file',
+            default_value=os.path.join(bringup, 'config', 'warehouse_map.json')),
+        # 出生点（世界坐标）——odom 从出生点算起，A* 地图是世界坐标，需要这个平移
+        DeclareLaunchArgument('spawn_x', default_value='1.5'),
+        DeclareLaunchArgument('spawn_y', default_value='1.5'),
+        DeclareLaunchArgument('scan_topic', default_value='/scan',
+                              description='激光雷达话题；没有雷达时留空即可（节点收不到数据）'),
         DeclareLaunchArgument('enable_depth', default_value='true',
                               description='没有深度相机就设 false（退化为纯 VLM+IMU）'),
         DeclareLaunchArgument('publish_debug_image', default_value='true'),
         DeclareLaunchArgument('enable_control', default_value='true'),
         DeclareLaunchArgument('require_imu', default_value='false'),
         DeclareLaunchArgument('rviz', default_value='false'),
-        vlm_node, depth_node, imu_node, controller, rviz,
+        # rviz 放最前：Gazebo 加载世界/模型时会吃满 CPU，rviz 的 Qt+GL 初始化
+        # 如果排在后面，窗口要等很久才出来
+        rviz, vlm_node, depth_node, scan_node, imu_node, slam_node,
+        planner_node, controller,
     ])

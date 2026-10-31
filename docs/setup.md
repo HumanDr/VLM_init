@@ -145,6 +145,24 @@ bash scripts/ollama.sh ps
 bash scripts/ollama_serve.sh
 ```
 
+### 手动启停（推荐）
+
+服务不随仿真自动启停，什么时候用什么时候开：
+
+```bash
+bash scripts/ollama_serve.sh     # 启动（已在跑就直接返回）
+bash scripts/ollama_stop.sh      # 停止，释放显存
+ollama ps                        # 看 PROCESSOR 是否 100% GPU
+```
+
+`ollama_stop.sh` 会依次尝试：`~/.ollama/serve.pid` 记录的进程 →
+`pkill -f "ollama serve"`（覆盖你在任意终端手动起的那份）→ 超时后 SIGKILL，
+最后确认 11434 端口真的释放了。重复执行没有副作用。
+
+> 想让它开机自启也可以，自己写一个 systemd 用户服务即可（本仓库不提供，
+> 避免和你手动启停的流程打架）。注意：服务在跑时 `ollama_stop.sh` 里的 pkill
+> 可能被 systemd 立刻拉起，需要 `systemctl --user stop ollama`。
+
 ### 国内下载：官方直连很慢
 
 | 源 | 实测速度 | 说明 |

@@ -30,12 +30,12 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
         DeclareLaunchArgument(
             'world',
-            default_value=os.path.join(vlbot_gazebo_share, 'worlds', 'corridor.world'),
+            default_value=os.path.join(vlbot_gazebo_share, 'worlds', 'warehouse.world'),
             description='SDF world 文件'),
         DeclareLaunchArgument('gui', default_value='true', description='是否启动 Gazebo 客户端'),
         DeclareLaunchArgument('pause', default_value='false'),
-        DeclareLaunchArgument('x', default_value='0.6'),
-        DeclareLaunchArgument('y', default_value='0.0'),
+        DeclareLaunchArgument('x', default_value='1.5'),
+        DeclareLaunchArgument('y', default_value='1.5'),
         DeclareLaunchArgument('yaw', default_value='0.0'),
 
         IncludeLaunchDescription(

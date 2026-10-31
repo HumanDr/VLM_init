@@ -14,7 +14,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Image, Imu
+from sensor_msgs.msg import Image, Imu, LaserScan
 from std_msgs.msg import String
 
 from .image_utils import bgr_to_image_msg
@@ -46,6 +46,7 @@ class FakeCamera(Node):
         self.frame_id = str(p('frame_id', 'camera_link').value)
         self.publish_depth = bool(p('publish_depth', True).value)
         self.publish_imu = bool(p('publish_imu', True).value)
+        self.publish_scan = bool(p('publish_scan', True).value)
         self.imu_rate = float(p('imu_rate_hz', 50.0).value)
         self.max_range = float(p('max_range', 6.0).value)
 
@@ -55,6 +56,9 @@ class FakeCamera(Node):
                            if self.publish_depth else None)
         self._pub_imu = (self.create_publisher(Imu, '/imu/data', qos_profile_sensor_data)
                          if self.publish_imu else None)
+        self._pub_scan = (self.create_publisher(LaserScan, '/scan',
+                                                qos_profile_sensor_data)
+                          if self.publish_scan else None)
         self.create_subscription(String, '/test/scene', self._on_scene, 10)
 
         self.create_timer(1.0 / max(0.5, self.rate), self._tick_image)
@@ -165,6 +169,41 @@ class FakeCamera(Node):
         depth[r0:r1, max(0, c0):max(1, c1)] = dist
 
     # ------------------------------------------------------------ publish
+    def _laser_arc(self):
+        """按场景返回 (中心方位角, 距离)；与深度图里的障碍保持一致。"""
+        scene = self.scene
+        arcs = {
+            'center': (0.0, 0.30),
+            'left': (0.55, 0.35),
+            'right': (-0.55, 0.30),
+            'closed': (0.0, 0.18),
+            'crowded': (0.0, 0.35),
+            'person': (0.0, 0.30),
+        }
+        return arcs.get(scene)
+
+    def _publish_laser(self, stamp) -> None:
+        n = 720
+        msg = LaserScan()
+        msg.header.stamp = stamp
+        msg.header.frame_id = 'laser_link'
+        msg.angle_min = -math.pi
+        msg.angle_max = math.pi
+        msg.angle_increment = 2.0 * math.pi / (n - 1)
+        msg.range_min = 0.12
+        msg.range_max = 12.0
+        ranges = [7.0] * n
+        arc = self._laser_arc()
+        if arc is not None:
+            bearing, dist = arc
+            half = 0.25          # 障碍在雷达上占 ±14°
+            for i in range(n):
+                a = msg.angle_min + i * msg.angle_increment
+                if abs(a - bearing) <= half:
+                    ranges[i] = dist
+        msg.ranges = ranges
+        self._pub_scan.publish(msg)
+
     def _tick_image(self) -> None:
         img, depth = self._render()
         stamp = self.get_clock().now().to_msg()
@@ -179,6 +218,8 @@ class FakeCamera(Node):
             dmsg.step = depth.shape[1] * 4
             dmsg.data = np.ascontiguousarray(depth, dtype=np.float32).tobytes()
             self._pub_depth.publish(dmsg)
+        if self._pub_scan is not None:
+            self._publish_laser(stamp)
 
     def _tick_imu(self) -> None:
         roll = 1.2 if self.scene == 'tilt' else 0.0

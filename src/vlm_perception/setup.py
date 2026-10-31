@@ -24,6 +24,7 @@ setup(
             'depth_sectors_node = vlm_perception.depth_sectors_node:main',
             'mock_vlm_server = vlm_perception.mock_vlm_server:main',
             'fake_camera = vlm_perception.fake_camera:main',
+            'scan_sectors_node = vlm_perception.scan_sectors_node:main',
         ],
     },
 )

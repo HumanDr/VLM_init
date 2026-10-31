@@ -15,6 +15,7 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 URDF = os.path.join(ROOT, 'src/vlbot_description/urdf/vlbot.urdf')
 WORLD = os.path.join(ROOT, 'src/vlbot_gazebo/worlds/corridor.world')
+WAREHOUSE = os.path.join(ROOT, 'src/vlbot_gazebo/worlds/warehouse.world')
 GZ = shutil.which('gz')
 
 pytestmark = pytest.mark.skipif(GZ is None, reason='gazebo 未安装（scripts/install_gazebo.sh）')
@@ -41,8 +42,12 @@ def test_urdf_converts_to_sdf(tmp_path):
         assert plugin in sdf, f'URDF 里缺少 {plugin}'
 
     # 相机 / 深度 / IMU 三个传感器
-    for kind in ("type='camera'", "type='depth'", "type='imu'"):
+    for kind in ("type='camera'", "type='depth'", "type='imu'", "type='ray'"):
         assert kind in sdf, f'URDF 里缺少传感器 {kind}'
+
+    # 激光雷达
+    assert 'libgazebo_ros_ray_sensor.so' in sdf
+    assert '<frame_name>laser_link</frame_name>' in sdf
 
     # 差速驱动的关键参数
     assert 'wheel_separation' in sdf and 'wheel_diameter' in sdf
@@ -68,3 +73,18 @@ def test_world_contains_expected_obstacles():
     for name in ('red_box', 'blue_bin', 'yellow_box', 'person',
                  'wall_left', 'wall_right', 'ground_plane'):
         assert f'name="{name}"' in text, f'world 缺少 {name}'
+
+
+def test_warehouse_world_is_valid(tmp_path):
+    r = subprocess.run([GZ, 'sdf', '-k', WAREHOUSE], capture_output=True, text=True,
+                       env=_env(tmp_path), timeout=120)
+    assert r.returncode == 0, (r.stdout + r.stderr)[-2000:]
+
+
+def test_warehouse_has_rooms_and_goal_marker():
+    with open(WAREHOUSE, encoding='utf-8') as f:
+        text = f.read()
+    for name in ('wall_south', 'wall_east', 'partition_a', 'partition_b',
+                 'partition_c', 'red_box', 'blue_bin', 'person', 'goal_marker'):
+        assert f'name="{name}"' in text, f'warehouse 缺少 {name}'
+    assert 'goal_marker' in text

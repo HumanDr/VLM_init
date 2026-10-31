@@ -79,7 +79,38 @@ python3 -m pytest tests/test_tunable_json.py -q   # 检查键名/类型/取值�
 | `lateral_cooldown` | 2.5 s | 两次侧向避让之间的冷却 |
 | `obstacle_risk_threshold` | 0.70 | 融合风险 ≥ 此值 → 视为障碍（正前方障碍另有一票否决） |
 | `unknown_risk` | 0.35 | 完全没感知时假定风险 |
+| `goal_tolerance` | 0.30 | 距目标多近算到达 |
+| `goal_kp` / `goal_max_angular` | 1.40 / 0.90 | 目的地导航的航向增益与角速度上限 |
+| `goal_slow_angle` | 0.90 | 航向误差超过它就先原地转，不前进 |
+| `goal_slow_radius` | 1.20 | 距目标 1.2 m 内开始减速 |
 | `prefer_side` | +1 | 两侧一样空时优先方向；-1 = 优先右转 |
+
+### 2.2b 激光雷达
+
+| 参数 | 默认 | 作用 |
+|---|---|---|
+| `front_angle_deg` | 40 | 正前方扇区总张角（±20°） |
+| `side_angle_deg` | 100 | 左右扇区外边界 |
+| `max_range` | 12.0 | 输出上限（更远的记成它） |
+| `range_min` / `range_max` | 0.12 / 20.0 | 过滤无效回波 |
+
+雷达与深度是逐项取 min 的，所以调 `max_range` 只会影响"远处怎么报"，不会让车更保守。
+
+### 2.2c A* 全局规划
+
+| 参数 | 默认 | 作用 |
+|---|---|---|
+| `inflation_radius` | 0.28 m | 障碍膨胀半径；太小会贴着墙过，太大会把门堵死 |
+| `replan_period` | 2.0 s | 多久按当前位置重算一次路径 |
+| `waypoint_tolerance` | 0.35 m | 离路点多近算"到达该路点"，换下一个 |
+| `smooth` | true | 视线平滑，减少拐点（关掉会看到密集的格子路径） |
+| `map_offset_x/y` | 1.5 / 1.5 | odom 原点对应的世界坐标（= 出生点）；launch 用 `x:=`/`y:=` 自动传 |
+
+换世界后必须重新生成地图：
+
+```bash
+python3 scripts/make_map_from_world.py --world <world> --out <json>
+```
 
 ### 2.3 VLM 与反应速度
 
@@ -169,6 +200,7 @@ v = min(cruise_linear,
 |---|---|
 | 车走得太慢 / 老停 | `obstacle_distance` ↓、`stop_distance` ↓、`clear_path_distance` ↓ |
 | 差点撞上 | `obstacle_distance` ↑、`stop_distance` ↑、`cruise_linear` ↓ |
+| 目标在墙后不绕 / 顶墙 | 没有 `/plan` 或地图不匹配：确认 `path_planner_node` 在跑、`/map` 有数据；改过世界要重新生成地图 |
 | **原地/大圈绕圈** | 侧向避让预算太宽 → `lateral_swerve_max_angle` ↓（0.4363→0.26）、`lateral_swerve_max_time` ↓（1.0→0.6）、`side_push_max` ↓；或 `clear_path_distance` ↓ 让侧向报告更容易被忽略 |
 | 在两侧墙之间左右横跳 | `release_margin` ↑、`hold_time` ↑、`side_margin` ↑ |
 | 贴着墙走 / 擦墙 | `side_push_gain` ↑、`side_push_distance` ↑ |

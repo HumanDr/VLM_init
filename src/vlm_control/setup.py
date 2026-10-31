@@ -22,6 +22,11 @@ setup(
         'console_scripts': [
             'avoidance_controller = vlm_control.controller_node:main',
             'imu_state_node = vlm_control.imu_node:main',
+            'path_planner_node = vlm_control.path_planner_node:main',
+            'ground_truth_odom = vlm_control.ground_truth_odom:main',
+            'slam_node = vlm_control.slam_node:main',
+            'tf_pose_bridge = vlm_control.tf_pose_bridge:main',
+            'wheel_odom_bridge = vlm_control.wheel_odom_bridge:main',
         ],
     },
 )

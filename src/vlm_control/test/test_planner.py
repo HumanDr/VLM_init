@@ -203,6 +203,60 @@ def test_unknown_state_creeps_then_stops():
     assert out.risk >= 0.3            # 未知风险不能当成"通"
 
 
+# ---------------------------------------------------------------- 目的地导航
+
+def test_goto_turns_toward_goal():
+    pl = make_planner()
+    out = pl.update(free_inputs(now=0.0, mode='goto', goal_dist=5.0,
+                                goal_bearing=0.4))
+    assert out.state == 'GOTO'
+    assert out.angular > 0.3          # 目标在左前方 -> 左转
+    assert out.linear > 0.05
+
+
+def test_goto_turns_right_when_goal_on_right():
+    pl = make_planner()
+    out = pl.update(free_inputs(now=0.0, mode='goto', goal_dist=5.0,
+                                goal_bearing=-0.4))
+    assert out.state == 'GOTO'
+    assert out.angular < -0.3
+
+
+def test_goto_rotates_in_place_when_goal_behind():
+    pl = make_planner()
+    out = pl.update(free_inputs(now=0.0, mode='goto', goal_dist=4.0,
+                                goal_bearing=2.5))
+    assert out.state == 'GOTO'
+    assert abs(out.linear) < 1e-6     # 角度太大，先原地转
+    assert abs(out.angular) <= 0.9    # goal_max_angular
+
+
+def test_goto_arrives():
+    pl = make_planner(goal_tolerance=0.30)
+    out = pl.update(free_inputs(now=0.0, mode='goto', goal_dist=0.2,
+                                goal_bearing=0.1))
+    assert out.state == 'ARRIVED'
+    assert out.linear == 0.0 and out.angular == 0.0
+
+
+def test_goto_yields_to_obstacle():
+    """去目的地的路上遇到障碍，避障优先。"""
+    pl = make_planner()
+    out = pl.update(free_inputs(now=0.0, mode='goto', goal_dist=5.0,
+                                goal_bearing=0.0, center=0.2,
+                                left=0.2, right=0.2))
+    assert out.state == 'STOP'
+
+
+def test_goto_slows_down_near_goal():
+    pl = make_planner(goal_slow_radius=1.2)
+    far = pl.update(free_inputs(now=0.0, mode='goto', goal_dist=6.0,
+                                goal_bearing=0.0))
+    near = pl.update(free_inputs(now=0.0, mode='goto', goal_dist=0.5,
+                                 goal_bearing=0.0))
+    assert near.linear < far.linear
+
+
 # ---------------------------------------------------------------- IMU 滤波
 
 def test_complementary_filter_level():

@@ -14,3 +14,6 @@ bool vlm_stale
 
 # 看门狗降速系数（1.0 = 正常，0.0 = 完全停车）
 float32 watchdog_scale
+
+# 到目的地的距离 [m]；-1 表示当前没有设定目的地
+float32 distance_to_goal

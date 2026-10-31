@@ -1,3 +1,6 @@
+> 先看 [project_guide.md](project_guide.md)（运行/参数/阅读路径）；
+> 这份是**原理向**的深入讲解，配套读。
+
 # 新手导读：从零读懂这个视觉避障工程
 
 > 读完这份文档，你应该能回答三个问题：
@@ -57,9 +60,11 @@ flowchart LR
   subgraph 感知层
     CAM["相机 /camera/image_raw<br/>10 Hz"]
     DEP["深度 /camera_depth/depth/image_raw<br/>10 Hz"]
+    LID["激光雷达 /scan<br/>360° 10 Hz"]
     IMU["IMU /imu/data<br/>100 Hz"]
     VLM["vlm_obstacle_node<br/>1.5 Hz 语义判断"]
     SEC["depth_sectors_node<br/>10 Hz 三扇区距离"]
+    SCA["scan_sectors_node<br/>10 Hz 三扇区距离"]
     FILT["imu_state_node<br/>30 Hz 姿态"]
   end
   subgraph 决策层
@@ -71,10 +76,17 @@ flowchart LR
   end
   CAM --> VLM
   CAM --> DEP --> SEC
+  LID --> SCA
   IMU --> FILT
   VLM -->|"VlmObstacle"| CTRL
   SEC -->|"SectorScan"| CTRL
+  SCA -->|"SectorScan"| CTRL
   FILT -->|"ImuState"| CTRL
+  ODOM["/odom"] --> CTRL
+  GOAL["/goal_pose 目的地"] --> PLAN["path_planner_node<br/>A* 全局规划"]
+  ODOM --> PLAN
+  MAP["warehouse_map.json"] --> PLAN
+  PLAN -->|"/plan 路点"| CTRL
   CTRL -->|"Twist v, ω"| CMD --> GAZ
   VLM -->|"带标注的图"| DEBUG["/perception/vlm/annotated<br/>给人看"]
 ```
@@ -84,7 +96,8 @@ flowchart LR
 | 角色 | 频率 | 一次要多久 | 负责什么 | 它挂了会怎样 |
 |---|---|---|---|---|
 | 相机 / 深度 | 10 Hz | 100 ms | 提供原始画面 | 直接停（看不到路） |
-| 深度扇区 | 10 Hz | < 10 ms | 左/中/右还有几米 | 退化成纯 VLM，速度降到 70% |
+| 深度扇区 | 10 Hz | < 10 ms | 前方左/中/右还有几米 | 只靠雷达，行为不变 |
+| 激光雷达 | 10 Hz | < 5 ms | **360°** 左/中/右还有几米 | 只靠深度，行为不变 |
 | VLM | 1.5 Hz | 1~2 s | 那是什么、要不要躲 | 标记 stale，靠深度继续走 |
 | 规划器 | 20 Hz | < 1 ms | 出 `v`、`ω` | 车停（没人发指令） |
 | IMU | 100 Hz | 10 ms | 姿态、航向 | 航向保持失效；`require_imu` 时会停 |
@@ -195,6 +208,36 @@ for name, (c0, c1) in bands.items():
 - 第 2 段的 `d > 0.05` 是"比最近量程还近的值视为无效"，避免除零/噪声。
 - 第 3 段是核心：`camera_height - d·sin(beta)` 就是"这个点比相机低多少"，等于离地高度。
 - 第 4 段的 `min_valid_ratio` 是个保护：某个扇区有效像素太少时，直接报告"很远"。
+
+---
+
+## 2.5 感知层 A'：激光雷达（比深度更简单）
+
+雷达给出的是"一圈 720 个角度上各有多远"，把它按角度分成三段就行：
+
+```python
+front = 有效 & (|angle| <= 20°)        # 正前方
+left  = 有效 & (20° < angle <= 100°)   # 左侧
+right = 有效 & (-100° <= angle < -20°) # 右侧
+center = min(ranges[front])            # 每一段取最小值
+```
+
+代码在 [scan_sectors.py](../src/vlm_perception/vlm_perception/scan_sectors.py)，比深度还短。
+两个关键点：
+
+- **无效值**：激光雷达没打到东西时返回 `inf`，必须先用 `isfinite` 过滤；
+- **角度包裹**：360° 雷达的 `angle_min` 通常是 `-π`，扫描到 `+π` 要包回 `[-π, π]`，
+  否则正后方会被算成"正前方"。
+
+**为什么要和深度同时用？** 两者互补：
+
+| | 深度相机 | 激光雷达 |
+|---|---|---|
+| 视场 | 约 68° | **360°** |
+| 高度 | 能看到地面/矮物体 | 只有一个平面（0.21 m） |
+| 受光照影响 | 会 | 不会 |
+
+控制器把两路的三扇区**逐项取最小值**，谁更保守听谁的。
 
 ---
 
@@ -503,6 +546,75 @@ if lateral_claim:
 
 ---
 
+## 4.5 目的地导航：从"直着走"到"走到某处"
+
+前面所有逻辑都是"往前开、遇障绕开"。加目的地后多了一个模式：
+
+```mermaid
+flowchart LR
+  G["/goal_pose"] --> C["控制器：算 dist 和 bearing"]
+  O["/odom"] --> C
+  C --> P{"有障碍？"}
+  P -->|有| A["AVOID / STOP（避障优先）"]
+  P -->|没有| T["GOTO：朝目标转 + 前进"]
+  T --> R{"dist ≤ 0.30m?"}
+  R -->|是| AR["ARRIVED 停车"]
+  R -->|否| T
+```
+
+控制器里就三行数学（[controller_node.py:170 左右](../src/vlm_control/vlm_control/controller_node.py)）：
+
+```python
+dx = goal_x - odom_x
+dy = goal_y - odom_y
+dist = math.hypot(dx, dy)
+bearing = wrap_angle(math.atan2(dy, dx) - odom_yaw)
+```
+
+规划器拿到 `mode='goto'` 后：
+
+```python
+angular = clamp(goal_kp * bearing, ±goal_max_angular)
+align = max(0, 1 - |bearing| / goal_slow_angle)     # 角度大先原地转
+approach = min(1, max(0.25, dist / goal_slow_radius))  # 近了减速
+linear = cap * align * approach
+```
+
+### 4.6 A*：为什么还要一张地图
+
+只有"直连目标 + 本地避障"时，目标在墙后面会怎样？车会朝着墙开，快撞上时本地避障让它
+拐一下，拐完发现墙还在，再拐……它其实在**贴着墙蹭**，永远绕不过去。
+
+所以加了一个全局规划节点：
+
+```mermaid
+flowchart LR
+  W["warehouse.world"] --> M["栅格地图 0.1m/格"]
+  M --> I["按机器人半径膨胀 0.28m"]
+  I --> A["A*：8 邻域 / octile / 禁止切角"]
+  A --> S["视线平滑：几十格 -> 4~6 个路点"]
+  S --> P["/plan（odom 系）"]
+  P --> C["控制器：盯下一个路点"]
+```
+
+三个容易混的点：
+
+1. **地图是离线生成的**：`scripts/make_map_from_world.py` 读 SDF，把墙/箱子 rasterize 成
+   0/1 栅格。它只画**有碰撞体**的东西，所以目标点那个绿色标记不会出现在图里
+   （否则车会认为终点是障碍，永远到不了）。
+2. **膨胀**：把障碍按机器人半径向外扩一圈，A* 只走"车中心能过"的格子。太小会蹭墙，
+   太大会把门堵死。
+3. **坐标系**：地图是世界坐标，`/odom` 从出生点算起。`map_offset_x/y` 就是出生点在
+   世界里的位置，launch 会把 `x:=`/`y:=` 自动传进去。
+
+控制器拿到 `/plan` 后不再盯终点，而是盯**第一个离自己超过 0.35 m 的路点**；
+到达判定仍然看最终目标。路上真遇到障碍，本地避障照常接管（避障优先）。
+
+**还有局限吗？** 有：地图是静态的。运行中新冒出来的障碍（移动的人）只能靠本地避障躲，
+A* 不会为它改路线；要做动态规划得把雷达接进代价地图。
+
+---
+
 ## 5. 执行层：ROS 节点怎么把决策变成 `/cmd_vel`
 
 规划器是纯算法，`avoidance_controller` 负责"喂数据、收结果、发话题"。
@@ -573,7 +685,7 @@ for f in fields(params):                       # 遍历 dataclass 的字段
 ```mermaid
 flowchart LR
   S0["0 跑起来<br/>10 min"] --> S1["1 消息定义<br/>15 min"] --> S2["2 深度扇区<br/>20 min"]
-  S2 --> S3["3 规划器<br/>40 min"] --> S4["4 VLM 节点<br/>30 min"]
+  S2 --> S2b["2.5 激光雷达<br/>10 min"] --> S3["3 规划器<br/>40 min"] --> S4["4 VLM 节点<br/>30 min"]
   S4 --> S5["5 控制节点<br/>20 min"] --> S6["6 launch/参数<br/>15 min"]
   S6 --> S7["7 测试<br/>20 min"] --> S8["8 URDF/世界<br/>可选"]
 ```
@@ -602,6 +714,22 @@ python3 scripts/probe.py         # 另开终端
 **目标**：理解"深度图 → 三个数字"的转换，以及地面过滤的几何。
 **动手**：把 `ground_clearance` 从 0.06 改成 0.5，重启，看 `/perception/sectors/result`
 里的数值怎么变（会变成 5.0 = 全是"很远"，因为障碍也被当成地面滤掉了）。
+
+### Step 2.5：读激光雷达扇区（10 分钟）
+
+读 [scan_sectors.py](../src/vlm_perception/vlm_perception/scan_sectors.py)（不到 90 行）。
+它和深度扇区是**同一个输出格式**（`SectorScan`），看完你就明白"为什么两个不同传感器
+可以无缝替换/融合"——因为它们被抽象成了同一份契约。
+
+### Step 2.8：读 A* 栅格规划（25 分钟）
+
+读 [grid_map.py](../src/vlm_control/vlm_control/grid_map.py)（约 230 行）和
+[path_planner_node.py](../src/vlm_control/vlm_control/path_planner_node.py)。
+
+**目标**：理解"世界 → 栅格 → 膨胀 → A* → 平滑 → 路点"这一串，以及为什么
+地图和 odom 之间要差一个 `map_offset`。
+**动手**：`python3 scripts/make_map_from_world.py` 重新生成地图，然后用
+`python3 -c` 调 `GridMap.plan()` 打印一条路径，看看它怎么绕开 x=9 那道墙。
 
 ### Step 3：读规划器，这是项目的心脏（40 分钟）
 
@@ -715,6 +843,45 @@ VLM 1 Hz 且不稳定。没有它，相邻两帧结论相反会导致左右横�
 本项目按需求"先不接激光雷达"，但接口是通用的：把 `/perception/sectors/result`
 换成激光雷达的扇区数据即可。
 
+**Q6.5：目的地怎么用？目标在墙后面能绕吗？**
+
+```bash
+bash scripts/goal.sh 8 5        # 近的
+bash scripts/goal.sh 22 -6      # 远的：要绕过两道隔墙
+bash scripts/goal.sh cancel
+```
+
+能绕。`path_planner_node` 用 `warehouse_map.json` 做 A*，把路径发到 `/plan`，
+控制器逐点跟随，rviz 里能同时看到地图和路径。
+
+前提是地图和世界配套——**改了世界必须重新生成**：
+
+```bash
+python3 scripts/make_map_from_world.py
+```
+
+如果 `/plan` 一直是空的，控制器会退回"直连目标"（就会顶墙），
+先用 `python3 scripts/doctor.py` 或 `ros2 topic echo /plan` 确认规划节点在发路径。
+
+**Q6.6：Ollama 要手动启动吗？**
+
+要。`run_sim.sh` **不会**替你启动 Ollama，只在检测不到时打一行提示；
+VLM 缺席时车靠深度/雷达继续跑（日志里出现 `仅深度通道`）。
+
+```bash
+bash scripts/ollama_serve.sh   # 开始实验前启动（幂等）
+bash scripts/ollama_stop.sh    # 结束后停止，释放显存
+```
+
+**Q6.7：RViz 里的车和 Gazebo 对不上、路径像穿墙？**
+
+先看 `/odom` 是谁发的。轮式里程计撞墙打滑会漂，越走越偏，地图自然对不上。
+仿真里我们已经改用 **Gazebo 真值位姿**（`gazebo_ros_p3d` → `ground_truth_odom`），
+轮式里程计只留在 `/wheel_odom` 上做漂移诊断（节点日志会打印漂移量）。
+
+如果还是对不上，检查 rviz 的 **Fixed Frame 是不是 `odom`**，以及 `ground_truth_odom`
+节点有没有在跑（`ros2 node list | grep ground_truth`）。
+
 **Q7：CPU 和 GPU 差多少？**
 3B 模型：GPU 单帧 1~2 s，CPU 10~16 s。所以 CPU 时 `timeout` 要放大到 60~120，
 `rate_hz` 降到 0.2~1.5；此时系统基本靠深度通道，VLM 只做慢速语义补充。
@@ -749,22 +916,27 @@ src/
 ├── vlm_avoid_interfaces/msg/      ← 四个消息定义（Step 1）
 ├── vlm_perception/
 │   ├── depth_sectors.py           ← 深度→三扇区（Step 2）
+│   ├── scan_sectors.py            ← 雷达→三扇区（Step 2.5）
 │   ├── depth_sectors_node.py      ← 深度节点（薄壳）
 │   ├── vlm_client.py              ← 提示词 + JSON 解析 + HTTP（Step 4）
 │   ├── vlm_node.py                ← 工作线程 + 节流（Step 4）
 │   └── mock_vlm_server.py         ← 无 GPU 时的假模型（测试用）
 ├── vlm_control/
 │   ├── planner.py                 ← ★ 核心算法（Step 3）
+│   ├── grid_map.py                ← A* 栅格规划（Step 2.8）
+│   ├── path_planner_node.py       ← 把 A* 接成 ROS 节点
 │   ├── controller_node.py         ← 20 Hz 定时器（Step 5）
 │   ├── imu_filter.py              ← 互补滤波
 │   └── imu_node.py
 ├── vlbot_description/urdf/        ← 车体模型（Step 8）
-├── vlbot_gazebo/worlds/           ← 仿真世界（Step 8）
+├── vlbot_gazebo/worlds/
+│   ├── warehouse.world            ← 26x18m 仓库（默认，Step 8）
+│   └── corridor.world             ← 14m 走廊（旧场景）
 └── vlm_avoid_bringup/
     ├── launch/                    ← 启动脚本（Step 6）
     └── config/tunable.json        ← ★ 调参入口
 tests/                             ← 行为说明书（Step 7）
-scripts/                           ← 工具：doctor / probe / teleop / 测试
+scripts/                           ← 工具：doctor / probe / teleop / goal / 测试
 ```
 
 读完这份文档，建议直接打开 `planner.py` 的 `update()`，对照第 4 节再读一遍——

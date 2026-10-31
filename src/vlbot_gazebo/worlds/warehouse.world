@@ -1,0 +1,243 @@
+<?xml version="1.0"?>
+<!--
+  仓储场景：约 26m x 18m，两个房间 + 一道 L 形隔墙 + 一道内墙，
+  中间散布箱子/垃圾桶/锥桶/"人"，用于验证：
+    1. 长距离巡逻（比走廊大得多，激光雷达的 360° 才有意义）
+    2. 目的地导航（绕开隔墙走到目标点）
+    3. 视觉语义（红箱/蓝桶/黄色货物/人）
+
+  机器人出生点 (1.5, 1.5)，朝 +x。推荐目标点 (22, -6)：
+  需要先向北绕过 x=9 的墙，再向东，最后向南绕过 x=18 的内墙。
+-->
+<sdf version="1.6">
+  <world name="vlbot_warehouse">
+
+    <physics name="default_physics" default="true" type="ode">
+      <max_step_size>0.002</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>500</real_time_update_rate>
+    </physics>
+
+    <scene>
+      <ambient>0.48 0.48 0.50 1</ambient>
+      <background>0.62 0.70 0.78 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 12 0 0 0</pose>
+      <diffuse>0.95 0.95 0.90 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.35 0.22 -0.91</direction>
+    </light>
+
+    <!-- 仓库顶灯：4 盏，保证相机画面亮度稳定 -->
+    <light type="point" name="lamp_1"><pose>4 4 4.2 0 0 0</pose>
+      <diffuse>0.75 0.75 0.72 1</diffuse><specular>0.05 0.05 0.05 1</specular>
+      <attenuation><range>22</range><constant>0.7</constant><linear>0.03</linear><quadratic>0.01</quadratic></attenuation>
+    </light>
+    <light type="point" name="lamp_2"><pose>4 -4 4.2 0 0 0</pose>
+      <diffuse>0.75 0.75 0.72 1</diffuse><specular>0.05 0.05 0.05 1</specular>
+      <attenuation><range>22</range><constant>0.7</constant><linear>0.03</linear><quadratic>0.01</quadratic></attenuation>
+    </light>
+    <light type="point" name="lamp_3"><pose>15 4 4.2 0 0 0</pose>
+      <diffuse>0.75 0.75 0.72 1</diffuse><specular>0.05 0.05 0.05 1</specular>
+      <attenuation><range>22</range><constant>0.7</constant><linear>0.03</linear><quadratic>0.01</quadratic></attenuation>
+    </light>
+    <light type="point" name="lamp_4"><pose>15 -4 4.2 0 0 0</pose>
+      <diffuse>0.75 0.75 0.72 1</diffuse><specular>0.05 0.05 0.05 1</specular>
+      <attenuation><range>22</range><constant>0.7</constant><linear>0.03</linear><quadratic>0.01</quadratic></attenuation>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>60 60</size></plane></geometry>
+          <surface><friction><ode><mu>0.8</mu><mu2>0.8</mu2></ode></friction></surface>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>60 60</size></plane></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ================= 外墙（26 x 18，中心在 (12,0)） ================= -->
+    <model name="wall_south">
+      <static>true</static><pose>12 -9 1.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>26.4 0.2 2.5</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>26.4 0.2 2.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Wood</name></script></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_north">
+      <static>true</static><pose>12 9 1.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>26.4 0.2 2.5</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>26.4 0.2 2.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Wood</name></script></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_west">
+      <static>true</static><pose>-1 0 1.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.2 18.4 2.5</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.2 18.4 2.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Wood</name></script></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_east">
+      <static>true</static><pose>25 0 1.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.2 18.4 2.5</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.2 18.4 2.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Wood</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ================= 内部分隔墙（形成 S 形路线） ================= -->
+    <!-- 竖墙 A：x=9，y 从 -9 到 2，北侧留通道 -->
+    <model name="partition_a">
+      <static>true</static><pose>9 -3.5 1.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.2 11.0 2.5</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.2 11.0 2.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+      </link>
+    </model>
+    <!-- 横墙 B：y=2，x 从 9 到 18，与 A 形成内角 -->
+    <model name="partition_b">
+      <static>true</static><pose>13.5 2 1.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>9.0 0.2 2.5</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>9.0 0.2 2.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+      </link>
+    </model>
+    <!-- 竖墙 C：x=18，y 从 -9 到 -2，北侧留通道 -->
+    <model name="partition_c">
+      <static>true</static><pose>18 -5.5 1.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.2 7.0 2.5</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.2 7.0 2.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ================= 障碍物 ================= -->
+    <model name="red_box">
+      <static>true</static><pose>4.2 2.6 0.30 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.6 0.6 0.6</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.6 0.6 0.6</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Red</name></script></material>
+        </visual>
+      </link>
+    </model>
+    <model name="blue_bin">
+      <static>true</static><pose>6.4 -2.2 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.22</radius><length>0.7</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.22</radius><length>0.7</length></cylinder></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Blue</name></script></material>
+        </visual>
+      </link>
+    </model>
+    <model name="yellow_box">
+      <static>true</static><pose>12.0 5.2 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.8 0.5 0.5</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.8 0.5 0.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Yellow</name></script></material>
+        </visual>
+      </link>
+    </model>
+    <model name="person">
+      <static>true</static><pose>16.0 -3.0 0 0 0 0</pose>
+      <link name="link">
+        <collision name="body"><pose>0 0 0.85 0 0 0</pose>
+          <geometry><cylinder><radius>0.22</radius><length>1.4</length></cylinder></geometry></collision>
+        <visual name="body_v"><pose>0 0 0.85 0 0 0</pose>
+          <geometry><cylinder><radius>0.22</radius><length>1.4</length></cylinder></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+        <collision name="head"><pose>0 0 1.65 0 0 0</pose>
+          <geometry><sphere><radius>0.16</radius></sphere></geometry></collision>
+        <visual name="head_v"><pose>0 0 1.65 0 0 0</pose>
+          <geometry><sphere><radius>0.16</radius></sphere></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+      </link>
+    </model>
+    <model name="crate_1">
+      <static>true</static><pose>2.5 -2.0 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.5 0.5 0.5</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.5 0.5 0.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Wood</name></script></material>
+        </visual>
+      </link>
+    </model>
+    <model name="crate_2">
+      <static>true</static><pose>20.5 3.5 0.35 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.7 0.7 0.7</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.7 0.7 0.7</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Wood</name></script></material>
+        </visual>
+      </link>
+    </model>
+    <model name="cone_1">
+      <static>true</static><pose>7.5 1.2 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.12</radius><length>0.3</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.12</radius><length>0.3</length></cylinder></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Green</name></script></material>
+        </visual>
+      </link>
+    </model>
+    <model name="cone_2">
+      <static>true</static><pose>21.5 -7.2 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.12</radius><length>0.3</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.12</radius><length>0.3</length></cylinder></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Green</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 目标点标记：只有 visual、没有 collision，
+         所以激光雷达/深度相机都看不见它，纯粹给人做参考 -->
+    <model name="goal_marker">
+      <static>true</static><pose>22 -6 0.012 0 0 0</pose>
+      <link name="link">
+        <visual name="ring">
+          <geometry><cylinder><radius>0.9</radius><length>0.02</length></cylinder></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Green</name></script></material>
+        </visual>
+        <visual name="pole">
+          <pose>0 0 0.6 0 0 0</pose>
+          <geometry><cylinder><radius>0.02</radius><length>1.2</length></cylinder></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Green</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>

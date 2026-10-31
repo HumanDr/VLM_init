@@ -5,19 +5,29 @@
     "键名必须与节点真实参数一致，写错会被忽略——tests/test_tunable_json.py 会帮你检查拼写。",
     "带下划线开头的键（_comment）只是注释，不会传给节点。"
   ],
-
   "avoidance_controller": {
-    "_comment": "决策/执行层：速度、障碍判定、时序、降级、IMU、平滑自救",
+    "_comment": "决策/执行层：速度、障碍判定、时序、降级、IMU、平滑自救、目的地导航",
+    "cmd_vel_topic": "/cmd_vel",
+    "vlm_topic": "/perception/vlm/result",
+    "sector_topic": "/perception/sectors/result",
+    "imu_state_topic": "/state/imu",
+    "scan_sector_topic": "/perception/scan_sectors",
+    "odom_topic": "/odom",
+    "goal_topic": "/goal_pose",
+    "plan_topic": "/plan",
+    "waypoint_tolerance": 0.35,
+    "odom_timeout": 0.5,
+    "status_topic": "/vlm_avoid/status",
     "publish_rate_hz": 20.0,
-
-    "max_linear": 0.45,
-    "cruise_linear": 0.35,
+    "enable": true,
+    "require_imu": false,
+    "max_linear": 0.8,
+    "cruise_linear": 0.7,
     "creep_linear": 0.12,
-    "max_angular": 1.2,
-    "avoid_angular": 0.85,
-
+    "max_angular": 1.4,
+    "avoid_angular": 1.0,
     "stop_distance": 0.15,
-    "slow_distance": 0.8,
+    "slow_distance": 1.0,
     "obstacle_distance": 0.35,
     "release_margin": 0.25,
     "turn_min_clearance": 0.35,
@@ -26,53 +36,63 @@
     "side_push_max": 0.25,
     "side_push_distance": 0.75,
     "clear_path_distance": 0.55,
-
-    "_comment_lateral": "侧向避让预算：最多转多少 / 转多久，防止被模型误报带着绕圈",
     "lateral_swerve_max_angle": 0.4363,
     "lateral_swerve_max_time": 1.0,
     "lateral_cooldown": 2.5,
-
     "hold_time": 1.2,
     "vlm_risk_tau": 2.5,
     "unknown_risk": 0.35,
     "obstacle_risk_threshold": 0.7,
     "prefer_side": 1,
-
+    "goal_tolerance": 0.3,
+    "goal_kp": 1.4,
+    "goal_max_angular": 0.9,
+    "goal_slow_angle": 0.9,
+    "goal_slow_radius": 1.6,
     "vlm_stale_timeout": 3.0,
     "stale_creep": 0.12,
     "stop_after_stale": 6.0,
     "sensor_timeout": 0.5,
-
     "tilt_estop": 0.9,
     "heading_hold": true,
     "heading_kp": 0.9,
     "heading_max_angular": 0.35,
     "heading_deadband": 0.04,
     "heading_relock": 0.6,
-
     "smoothing_alpha": 0.45,
     "recovery_after": 4.0,
     "recovery_time": 2.0,
     "recovery_angular": 0.8,
-    "recovery_linear": -0.06
+    "recovery_linear": -0.06,
+    "fallback_odom_topic": "/wheel_odom",
+    "fallback_speed_scale": 0.6,
+    "stuck_recovery_time": 1.4,
+    "stuck_cooldown": 4.0
   },
-
   "vlm_obstacle_node": {
     "_comment": "语义通道：影响单帧耗时和判断保守程度",
+    "image_topic": "/camera/image_raw",
+    "result_topic": "/perception/vlm/result",
+    "annotated_topic": "/perception/vlm/annotated",
+    "vlm_url": "http://127.0.0.1:11434",
+    "api_style": "ollama",
+    "model": "qwen2.5vl:3b",
     "rate_hz": 1.5,
+    "keep_alive": "30m",
     "max_side": 384,
     "jpeg_quality": 70,
     "timeout": 60.0,
     "num_predict": 96,
     "num_ctx": 4096,
-    "keep_alive": "30m",
     "temperature": 0.0,
     "risk_ema_alpha": 0.5,
+    "publish_debug_image": true,
     "fail_publish_risk": 0.6
   },
-
   "depth_sectors_node": {
     "_comment": "几何安全网：相机外参必须与真机一致，否则地面过滤会失效",
+    "depth_topic": "/camera/depth/image_raw",
+    "result_topic": "/perception/sectors/result",
     "max_range": 5.0,
     "percentile": 10.0,
     "min_valid_ratio": 0.05,
@@ -82,16 +102,73 @@
     "horizontal_fov": 1.2,
     "vertical_fov": 0.0,
     "ground_clearance": 0.06,
-    "left_band": [0.0, 0.33],
-    "center_band": [0.33, 0.67],
-    "right_band": [0.67, 1.0]
+    "left_band": [
+      0.0,
+      0.33
+    ],
+    "center_band": [
+      0.33,
+      0.67
+    ],
+    "right_band": [
+      0.67,
+      1.0
+    ]
   },
-
   "imu_state_node": {
     "_comment": "姿态估计：alpha 越大越信陀螺；snap_threshold 越小越容易快速识别跌倒",
+    "imu_topic": "/imu/data",
+    "state_topic": "/state/imu",
     "alpha": 0.98,
     "snap_threshold": 0.5,
     "rate_hz": 30.0,
     "timeout": 0.5
+  },
+  "scan_sectors_node": {
+    "_comment": "激光雷达扇区：张角与量程",
+    "scan_topic": "/scan",
+    "result_topic": "/perception/scan_sectors",
+    "front_angle_deg": 40.0,
+    "side_angle_deg": 100.0,
+    "max_range": 12.0,
+    "range_min": 0.12,
+    "range_max": 20.0
+  },
+  "path_planner_node": {
+    "_comment": "A* 全局规划：地图、膨胀半径、重规划周期",
+    "goal_topic": "/goal_pose",
+    "goal_cancel_topic": "/goal_cancel",
+    "odom_topic": "/odom",
+    "plan_topic": "/plan",
+    "map_topic": "/map",
+    "inflation_radius": 0.28,
+    "map_offset_x": 1.5,
+    "map_offset_y": 1.5,
+    "replan_period": 2.0,
+    "odom_timeout": 0.5,
+    "publish_map": true,
+    "smooth": true,
+    "map_wait_timeout": 20.0,
+    "map_preview_topic": "/map_preview"
+  },
+  "slam_node": {
+    "_comment": "SLAM：扫描匹配 + 位姿图回环 + RGB-D 视觉里程计",
+    "scan_topic": "/scan",
+    "imu_topic": "/imu/data",
+    "wheel_odom_topic": "/wheel_odom",
+    "odom_topic": "/slam/odom",
+    "map_topic": "/map",
+    "map_frame": "odom",
+    "base_frame": "base_footprint",
+    "max_range": 12.0,
+    "map_publish_period": 1.0,
+    "keyframe_dist": 0.35,
+    "keyframe_angle": 0.2,
+    "loop_radius": 3.0,
+    "enable_vo": true,
+    "vo_rate_hz": 5.0,
+    "rgb_topic": "/camera_depth/image_raw",
+    "depth_topic": "/camera_depth/depth/image_raw",
+    "camera_info_topic": "/camera_depth/camera_info"
   }
 }

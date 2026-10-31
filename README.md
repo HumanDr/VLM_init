@@ -1,16 +1,19 @@
 # VLM 视觉避障（ROS2 Humble + Gazebo Classic + Qwen-VL）
 
-用**前置相机 + IMU** 做一个"感知 → 决策 → 执行"闭环：相机图像送本地 Qwen-VL 做语义判断，
-IMU 负责姿态/航向估计与倾覆急停，决策结果变成 `/cmd_vel` 控制差速小车。
-**不引入激光雷达**，深度相机（RGB-D）只作为可选的高频几何安全网。
+用**相机 + 深度 + 激光雷达 + IMU** 做一个"感知 → 决策 → 执行"闭环：相机图像送本地 Qwen-VL
+做语义判断，深度相机和 360° 激光雷达做几何安全网，IMU 负责姿态/航向估计与倾覆急停，
+决策结果变成 `/cmd_vel` 控制差速小车；并支持用 `/goal_pose` 指定**目的地**自动导航。
 
-> 本仓库已在此机器上完成：**Gazebo 11.10.2 已安装**、6 个 ROS2 包构建通过、**58 个测试通过**、
+> 本仓库已在此机器上完成：**Gazebo 11.10.2 已安装**、6 个 ROS2 包构建通过、**100 个测试通过**、
 > **1 个端到端集成测试通过**，并且 **Ollama + Qwen2.5-VL-3B 已装好并用真模型跑通了闭环**
 > （CPU 推理下 VLM 判定"红色立方体" → 控制器 `AVOID_LEFT, v=0.10, w=+0.60`）。
 > URDF/world 已通过 `gz sdf` 校验（4 个插件 + camera/depth/imu 三个传感器全部识别）。
 > 唯一没法在这里做的是**打开 Gazebo 画面**：当前会话没有 GPU 设备节点，`gzserver` 建不出 GLX 上下文。
 
 ---
+
+> **📖 想通读工程？看 [docs/project_guide.md](docs/project_guide.md)**
+> —— 运行方式、参数手册、代码地图、初学者阅读路径、踩坑速查，一份就够。
 
 ## 0. 新手从这里开始
 
@@ -30,12 +33,37 @@ bash scripts/install_gazebo.sh
 bash scripts/setup_vlm.sh              # A. 有 sudo：官方安装脚本 + systemd 服务
 bash scripts/install_ollama_noroot.sh  # B. 没 sudo：装到 ~/.local/bin + ~/.ollama，任意终端可用
 
+# 之后每次开始/结束实验，手动控制 Ollama（不随仿真自动启停）：
+bash scripts/ollama_serve.sh           # 启动（幂等）
+bash scripts/ollama_stop.sh            # 停止，释放显存（幂等）
+
 # ③ 构建 + 跑测试（不需要 GPU，也不需要 Gazebo）
 bash scripts/build.sh
 bash scripts/run_tests.sh
 
-# ④ 仿真：Gazebo 世界 + 小车 + 完整避障管线 + rviz2
+# ④ 仿真：仓库 + SLAM + 避障 + rviz2
+#    默认 localization:=rtabmap（RGB-D + 激光 + IMU）；
+#    没装 rtabmap 就用 localization:=slam（仓库内置，零依赖）；
+#    要对比"真值定位"用 localization:=ground_truth
 bash scripts/run_sim.sh
+
+# ⑤ 给个目的地，让它自己走过去（另开终端）
+bash scripts/goal.sh 8 5          # 先试近的：开放区域，路上只有红箱
+bash scripts/goal.sh 22 -6        # 远的：中间有两道隔墙，考验"沿墙绕行"的极限
+bash scripts/goal.sh cancel       # 取消，恢复自主巡航
+```
+
+也可以在 rviz2 里用工具栏的 **2D Goal Pose** 直接点地面（会同时在 rviz 里画出 A* 路径）。
+
+目标在墙后面也能绕：`path_planner_node` 用 `warehouse_map.json` 做 A* 全局规划，
+控制器逐点跟随。地图由世界生成，**改了世界要重新生成**：
+
+```bash
+python3 scripts/make_map_from_world.py          # 默认 warehouse
+# 换走廊场景时，地图和世界要配套：
+python3 scripts/make_map_from_world.py --world src/vlbot_gazebo/worlds/corridor.world \
+    --out src/vlm_avoid_bringup/config/corridor_map.json
+bash scripts/run_sim.sh world:=...corridor.world map_file:=.../corridor_map.json
 ```
 
 调试三件套：
@@ -97,10 +125,18 @@ flowchart LR
   CAM["/camera/image_raw<br/>640x480 @10Hz"] --> VLM["vlm_obstacle_node<br/>工作线程 1Hz"]
   VLM <-->|HTTP /api/chat| QWEN[("Ollama<br/>qwen2.5vl:3b")]
   CAM --> DEEP["/camera/depth/image_raw<br/>320x240 @10Hz"] --> SEC["depth_sectors_node<br/>左/中/右扇区"]
+  LID["/scan<br/>360° @10Hz"] --> SCAN["scan_sectors_node<br/>左/中/右扇区"]
   IMU["/imu/data<br/>100Hz"] --> FILT["imu_state_node<br/>互补滤波 30Hz"]
   VLM -->|"/perception/vlm/result<br/>VlmObstacle"| CTRL["avoidance_controller<br/>20Hz 反应式规划器"]
   SEC -->|"/perception/sectors/result<br/>SectorScan"| CTRL
+  SCAN -->|"/perception/scan_sectors<br/>SectorScan"| CTRL
   FILT -->|"/state/imu<br/>ImuState"| CTRL
+  ODOM["/odom（真值）"] --> CTRL
+  GOAL["/goal_pose<br/>目的地"] --> PLAN["path_planner_node<br/>A* 全局规划（含膨胀）"]
+  ODOM --> PLAN
+  MAPF[("warehouse_map.json<br/>26x18m 栅格图")] --> PLAN
+  PLAN -->|"/plan 路径"| CTRL
+  PLAN -->|"/map 可视化"| RVZ["rviz2"]
   CTRL -->|"Twist"| CMD["/cmd_vel"]
   CTRL -->|"DriveStatus"| DBG["/vlm_avoid/status"]
   VLM -->|"叠加图"| ANN["/perception/vlm/annotated"]
@@ -112,9 +148,9 @@ flowchart LR
 src/
 ├── vlm_avoid_interfaces/   4 个消息：VlmObstacle / SectorScan / ImuState / DriveStatus
 ├── vlm_perception/         VLM 客户端、感知节点、深度扇区、Mock 服务、假相机
-├── vlm_control/            反应式规划器（纯 Python）、IMU 状态估计、控制节点
-├── vlbot_description/      纯 URDF：差速底盘 + RGB 相机 + RGB-D 相机 + IMU
-├── vlbot_gazebo/           走廊世界 + 差速/相机/IMU 插件 + spawn 启动
+├── vlm_control/            反应式规划器、A* 栅格规划（grid_map）、IMU 状态估计、真值里程计、控制节点
+├── vlbot_description/      纯 URDF：差速底盘 + RGB 相机 + RGB-D 相机 + IMU + 激光雷达
+├── vlbot_gazebo/           仓库世界（26x18m）/ 走廊世界 + 插件 + spawn
 └── vlm_avoid_bringup/      顶层 launch + 参数（avoidance.yaml / tunable.json）+ rviz 配置
 tests/integration_mock.py   无 Gazebo 的端到端行为测试
 scripts/                    安装、体检、自检、启动、测试
@@ -128,6 +164,16 @@ docs/                       架构细节 / 安装排障 / 调参
 | 话题 | 类型 | 方向 | 说明 |
 |---|---|---|---|
 | `/camera/image_raw` | `sensor_msgs/Image` | 入 | 前置 RGB，10 Hz |
+| `/scan` | `sensor_msgs/LaserScan` | 入 | 360° 激光雷达，720 线，10 Hz |
+| `/perception/scan_sectors` | `SectorScan` | 内部 | 雷达版左/中/右最近距离 |
+| `/goal_pose` | `geometry_msgs/PoseStamped` | 入 | **目的地**（rviz 2D Goal Pose 或 `scripts/goal.sh`） |
+| `/goal_cancel` | `std_msgs/Empty` | 入 | 取消目的地，回到自主巡航 |
+| `/plan` | `nav_msgs/Path` | 内部 | A* 算出的路径（odom 系），控制器逐点跟随 |
+| `/map` | `nav_msgs/OccupancyGrid` | 双向 | SLAM 实时地图（A* 直接消费）；`ground_truth` 模式下由规划器发布离线地图 |
+| `/odom` | `nav_msgs/Odometry` | 入 | 轮式里程计（会漂，仅作参考/降级） |
+| `/slam/odom` | `nav_msgs/Odometry` | 入 | **SLAM 修正后的位姿**，控制器和 A* 用它 |
+| `/ground_truth/odom` | `nav_msgs/Odometry` | 内部 | Gazebo 真值位姿（世界系），由 `ground_truth_odom` 换算成 `/odom` |
+| `/wheel_odom` | `nav_msgs/Odometry` | 调试 | 轮式里程计（只用来对比漂移，不参与控制） |
 | `/camera/depth/image_raw` | `sensor_msgs/Image` (32FC1) | 入 | 可选；没有就 `enable_depth:=false` |
 | `/camera_depth/depth/image_raw` | 同上 | 入 | **仿真里用的是这个**（Gazebo 插件按 `camera_name + "/depth/image_raw"` 拼话题），`sim_avoid.launch.py` 已自动覆盖 |
 | `/imu/data` | `sensor_msgs/Imu` | 入 | 100 Hz |
@@ -159,6 +205,9 @@ docs/                       架构细节 / 安装排障 / 调参
 | `obstacle_risk_threshold` | 0.70 | 融合风险阈值；正前方障碍另有一票否决 |
 | `hold_time` | 1.2 | 避让承诺窗口（防 VLM 抖动） |
 | `vlm_stale_timeout` | 3.0 | 多久没结果算过期（自动按 3×延迟放宽） |
+| `goal_tolerance` | 0.30 | 距目标多近算到达 (m) |
+| `goal_kp` / `goal_max_angular` | 1.40 / 0.90 | 目的地导航的航向比例增益 / 角速度上限 |
+| `goal_slow_angle` / `goal_slow_radius` | 0.90 / 1.20 | 角度大于它先原地转；距离小于它开始减速 |
 | `tilt_estop` | 0.90 | IMU 倾角急停阈值 (rad) |
 | `require_imu` | false | 真机建议 true：IMU 不在线不许动 |
 
@@ -190,7 +239,8 @@ ros2 param set /vlm_obstacle_node rate_hz 2.0
 
 | VLM | 深度 | IMU | 行为 |
 |---|---|---|---|
-| 正常 | 正常 | 正常 | CRUISE / AVOID，全功能 |
+| 正常 | 正常 | 正常 | CRUISE / AVOID / GOTO，全功能 |
+| 正常 | 雷达断 | 正常 | 只用深度，行为不变（日志里 scan 无效） |
 | 正常 | 缺失 | 正常 | 纯语义避障，保留承诺窗口 + 航向保持 |
 | 缺失 | 正常 | 正常 | 0.7 倍巡航，靠几何通道避障，`stale=True` |
 | 缺失 | 缺失 | 正常 | 蠕行 6 s 后 STOP |
@@ -206,7 +256,7 @@ ros2 param set /vlm_obstacle_node rate_hz 2.0
 
 **已验证（本机实跑）**
 - `colcon build`：6 个包全部通过
-- 58 个测试：规划器状态机、JSON 容错解析、图像编解码、深度扇区与**地面过滤**、IMU 滤波、
+- 100 个测试：规划器状态机、JSON 容错解析、图像编解码、深度扇区与**地面过滤**、IMU 滤波、
   Mock HTTP 往返、launch 文件可加载、Gazebo 资产（`gz sdf` 转换与 world 校验）
 - **真实 Qwen2.5-VL-3B（CPU 推理）+ 真实 ROS 管线**（关闭深度通道，避让只能来自 VLM）：
   - 正前方红箱 → 模型 `{"obstacle": true, "risk": 0.68, "direction": "center", "label": "红色立方体"}`，暖机 3.2 s
@@ -219,6 +269,10 @@ ros2 param set /vlm_obstacle_node rate_hz 2.0
   - IMU 模拟倾覆 → `ESTOP`，指令严格归零
   - 杀掉 VLM 服务 → `stale=True`，限速 ≤0.21 m/s
   - 调试叠加图正常发布
+  - 激光雷达扇区与深度扇区都识别出 0.30 m 障碍（两路逐项取小）
+  - 目的地导航：给左侧 3 m 目标 → `GOTO` 且 `w=+0.90`；给脚下目标 → `ARRIVED` 且速度归零
+  - **A\* 绕墙**：目标设在墙 A 正后方时，规划出 4 个路点的绕行路径（向北绕，最北 y=0.95m），
+    控制器朝第一段路点转向（w=+0.17；直连目标时该值为 0）
 
 **待你验证（需要桌面会话）**
 - Gazebo 里相机/IMU 插件的**运行时**联调：
@@ -278,6 +332,8 @@ python3 scripts/doctor.py
 | VLM 一直 `stale` | `ollama list` 看模型在不在；`curl 127.0.0.1:11434/api/tags`；模型名必须和 `model` 参数一致 |
 | 单帧 3 s 以上 | 在跑 CPU：确认 `nvidia-smi` 能看到 ollama 进程；或把 `max_side` 降到 384 |
 | `VLM 调用失败（连续 N 次）: timeout` | 推理超时。CPU 推理单帧 10~16 s，把 `timeout` 调到 60~120；想真正实时就上 GPU（`bash scripts/ollama.sh ps` 看 PROCESSOR 是否 100% GPU） |
+| rviz 里机器人模型不显示 | `/robot_description` 是**锁存**话题，订阅端必须 `Durability: Transient Local`（`avoid.rviz` 已设）。另检查 `ros2 topic echo /robot_description --once` 有 URDF、Global Status 里 Fixed Frame `map` 是否存在（rtabmap 模式要等它发布 map→odom） |
+| RViz 和 Gazebo 对不上、路径像穿墙 | 位姿来源不对：仿真里 `/odom` 必须是**真值**（p3d 插件 → `ground_truth_odom`）；用轮式里程计撞墙后会漂。看 `ground_truth_odom` 日志里的"轮式里程计漂移 xx m"。另外确认 rviz 的 Fixed Frame 是 `odom` |
 | 车在原地/大圈绕 | VLM 对侧墙误报 `direction=left` + 侧向避让无终止条件。已加"深度佐证 + 转角预算(1 s/25°) + 冷却"；仍绕就调 `lateral_swerve_max_angle` ↓ 或 `side_push_max` ↓ |
 | 改了 `tunable.json` 没效果 | 键名拼错会被静默忽略。跑 `python3 -m pytest tests/test_tunable_json.py -q`，它专门检查键名是否存在 |
 | 三个扇区距离都是 ~0.5 m、状态一直 STOP | 深度把**脚下地板**当成了障碍。本项目已按相机外参剔除地面点；真机换相机后要改 `camera_height` / `camera_pitch` / `horizontal_fov`（设 `camera_height:=0` 可关闭过滤） |
@@ -292,7 +348,120 @@ python3 scripts/doctor.py
 
 ## 9. 下一步可以怎么加
 
-1. **接激光雷达**：`/scan` 替换深度扇区，接 Nav2 的 costmap，VLM 只做"语义标注"（把"人/玻璃门/施工区"写进代价地图）。
+1. **动态障碍 + 重规划**：现在的 A* 用的是静态地图，新增的障碍靠本地避障躲；
+   把激光雷达接进 costmap 后，可以在局部检测到新障碍时把栅格标脏并重新规划。
 2. **VLA 端到端**：Qwen-VL 直接出离散动作 token，用本仓库的状态机做安全层（保底）。这层现在是现成的。
 3. **真车**：`use_sim_time:=false require_imu:=true`，把 `/camera/image_raw`、`/imu/data` 换成真实驱动，`/cmd_vel` 接底盘；先低速 `max_linear:=0.15` 跑。
-4. **局部建图**：当前 `target_yaw` 只是短时间内保持直线，接 `slam_toolbox` + `nav2` 后可做全局目标导航。
+4. **SLAM 建图**：现在的地图是 `.world` 离线生成的（已知场景）；换到真机/未知场景时，
+   用 `slam_toolbox` 在线建图，再把它的 `/map` 喂给现在的 A* 即可。
+
+---
+
+## 10. 定位与 SLAM：三次实验记录（含历史）
+
+> 这一节按时间顺序记录"为什么这么选、怎么验证的"。旧实验不删——它们是排障和对比的基准。
+
+### 10.0 起因
+
+早期现象：**RViz 里的车和 Gazebo 里的车越走越偏，A* 路径像从墙里穿过去**。
+
+排查结论：地图本身没错（`tests/test_map_generation.py` 验证了墙的坐标、目标标记不进图、
+A* 绕行 26 m），错的是**位姿来源**——差速插件的轮式里程计靠轮速积分，撞墙、打滑后就漂。
+
+### 10.1 实验一：Gazebo 真值位姿 + 离线地图（保留，仅用于对比/排障）
+
+| | |
+|---|---|
+| 目的 | 先证明"地图 + A* + 控制器"这条几何链路是对的，把定位问题隔离出去 |
+| 方法 | `gazebo_ros_p3d` 发世界真值 → `ground_truth_odom` 换算成"相对出生点"的 `/odom` + TF；地图由 `scripts/make_map_from_world.py` 从 `.world` 生成 |
+| 结果 | RViz / Gazebo / A* 完全重合，绕墙路径正确 |
+| 局限 | **真机没有真值**，只能当基准，不能当方案 |
+| 现在怎么跑 | `bash scripts/run_sim.sh localization:=ground_truth` |
+
+保留它的原因：任何"定位看起来不对"的问题，都可以切到这个模式跑一次——
+如果真值模式下也对不上，那就是地图/坐标系的 bug；如果只有 SLAM 模式对不上，那是定位精度问题。
+
+### 10.2 实验二：RTAB-Map（当前默认，真方案）
+
+选型对比（ROS2 Humble，2024 前后主流）：
+
+| 框架 | 传感器 | 回环/图优化 | ROS2 支持 | 结论 |
+|---|---|---|---|---|
+| **RTAB-Map** | RGB-D + 激光 + IMU | ✅ | 官方 apt 包，维护活跃 | **选它** |
+| ORB-SLAM3 | 单目/双目/RGB-D（+IMU） | ✅ | 无官方 ROS2 包，编译重 | 纯视觉，不吃雷达，仿真纹理少时易跟丢 |
+| VINS-Fusion | 相机 + IMU | ✅（VIO） | 需自行移植 | 只做里程计，不建 2D 栅格图 |
+| slam_toolbox | 2D 激光 | ✅ | 官方 apt 包 | 很稳，但**不用相机/IMU**，不满足"三传感器" |
+| Cartographer | 2D/3D 激光 | ✅ | ROS2 支持较弱 | 偏重，配置复杂 |
+
+**RTAB-Map 的接法**：
+
+```mermaid
+flowchart LR
+  RGB["/camera_depth/image_raw"] --> RT["RTAB-Map<br/>视觉/ICP 里程计 + 回环"]
+  DEP["/camera_depth/depth/image_raw"] --> RT
+  INFO["/camera_depth/camera_info"] --> RT
+  SCAN["/scan"] --> RT
+  IMU["/imu/data"] --> RT
+  RT -->|"/map"| PLAN["A* 规划器"]
+  RT -->|"TF map→odom→base"| BR["tf_pose_bridge"]
+  BR -->|"/slam/odom"| CTRL["控制器 / A*"]
+```
+
+- 里程计可选：`odometry:=icp`（激光 ICP，仿真/空旷场景更稳，默认）或 `odometry:=visual`（RGB-D 视觉，纹理丰富时更好）
+- 相机仍然参与：RGB-D 用于建图与**视觉回环检测**
+- `tf_pose_bridge` 把 `map→base_footprint` 的 TF 转成项目统一的 `/slam/odom`，
+  这样换框架时控制器和 A* **一行都不用改**
+
+**验证状态**（实测，2026-10）：
+- ✅ `ros-humble-rtabmap-ros 0.23.13` 已安装，`icp_odometry` / `rtabmap` / `tf_pose_bridge` 三节点正常拉起
+- ✅ **用合成传感器数据跑通了整条 SLAM 链路**（`tests/rtabmap_smoke.py`）：
+  `Odom: ratio=0.88` → `rtabmap (283): RTAB-Map=0.0155s` → `/map 402x464 @0.05m frame=map` → `/slam/odom` 有输出
+- ⚠️ 用真实 Gazebo 相机时的建图效果仍需你确认（本开发环境没有 GPU 设备节点）
+
+**踩过的坑：`/map` 一直是空的**
+RTAB-Map 的节点运行在 `/rtabmap` 命名空间下，`map_topic` 参数默认是相对名 `map`
+→ 实际发到 **`/rtabmap/map`**，而 A*/rviz 订阅的是 `/map`，于是"没有建图、没有路径、车不动"。
+现在 launch 里用绝对名钉死：`map_topic:=/map`。自查命令：
+
+```bash
+ros2 topic info /map          # 应该有 1 个 publisher
+ros2 topic hz /map            # 建图时约 1Hz
+```
+
+```bash
+bash scripts/install_slam.sh          # 已装可跳过
+bash scripts/run_sim.sh               # 默认 localization:=rtabmap
+bash scripts/goal.sh 22 -6
+```
+
+### 10.3 实验三：仓库内置 SLAM（零依赖备用）
+
+装不了包/想改算法时用它。组成：
+
+1. **前端**：激光扫描对扫描匹配（似然场 + 由粗到精搜索），
+   IMU 陀螺给 yaw 先验，轮式里程计给平移先验，RGB-D `ORB + PnP` 视觉里程计提供第三路估计；
+2. **后端**：位姿图 + 回环检测（对历史关键帧做相对匹配）+ Gauss-Seidel 迭代优化；
+3. **地图**：对数几率占用栅格（射线投射），直接发 `/map` 给 A*。
+
+**验证方法**（不需要 Gazebo）：`scripts/slam_sim.py` 用 `warehouse_map.json` 射线投射出
+"完美激光雷达"，让机器人沿闭合路线走，给轮速加 5% 尺度误差 + yaw 偏置，比较漂移和 SLAM 误差：
+
+| 场景 | 轮式里程计漂移 | 内置 SLAM 误差 |
+|---|---|---|
+| 1 圈 18 m | 1.65 m | **0.30 m** |
+| 2 圈 36 m | 3.28 m | **0.38 m** |
+
+```bash
+python3 scripts/slam_sim.py            # 复现上面的数
+bash scripts/run_sim.sh localization:=slam   # 在真实管线里跑
+```
+
+### 10.4 三种模式怎么选
+
+| 模式 | 位姿来源 | 地图 | 依赖 | 用途 |
+|---|---|---|---|---|
+| `localization:=rtabmap`（默认） | RGB-D + 激光 + IMU | SLAM 实时建 | rtabmap-ros | 真方案 |
+| `localization:=slam` | 激光 + IMU + 轮速 + RGB-D | 内置 SLAM 实时建 | 无 | 零依赖备用 |
+| `localization:=ground_truth` | Gazebo 真值 | 离线地图 | 无 | 对比/排障基准 |
+
+> 真机上把 `localization:=ground_truth` 换掉即可，其余接口不变。

@@ -39,6 +39,55 @@ depth_sectors_node:
     center_band: [0.33, 0.67]
     right_band: [0.67, 1.0]
 
+slam_node:
+  ros__parameters:
+    scan_topic: /scan
+    imu_topic: /imu/data
+    wheel_odom_topic: /wheel_odom
+    odom_topic: /slam/odom
+    map_topic: /map
+    map_frame: odom
+    base_frame: base_footprint
+    max_range: 12.0
+    map_publish_period: 1.0
+    keyframe_dist: 0.35
+    keyframe_angle: 0.20
+    loop_radius: 3.0
+    # 视觉里程计（RGB-D）
+    enable_vo: true
+    vo_rate_hz: 5.0
+    rgb_topic: /camera_depth/image_raw
+    depth_topic: /camera_depth/depth/image_raw
+    camera_info_topic: /camera_depth/camera_info
+
+path_planner_node:
+  ros__parameters:
+    map_file: ''                 # 由 launch 覆盖成 <share>/config/warehouse_map.json
+    goal_topic: /goal_pose
+    goal_cancel_topic: /goal_cancel
+    odom_topic: /odom
+    plan_topic: /plan
+    map_topic: /map
+    inflation_radius: 0.28       # 障碍膨胀（机器人半宽 0.18 + 余量）
+    map_offset_x: 1.5            # odom 原点对应的世界坐标（= 出生点），launch 会自动覆盖
+    map_offset_y: 1.5
+    replan_period: 2.0
+    map_wait_timeout: 20.0      # 等 SLAM /map 多久，超时就回退离线地图
+    map_preview_topic: /map_preview
+    odom_timeout: 0.5
+    publish_map: true
+    smooth: true
+
+scan_sectors_node:
+  ros__parameters:
+    scan_topic: /scan
+    result_topic: /perception/scan_sectors
+    front_angle_deg: 40.0     # 正前方扇区总张角（±20°）
+    side_angle_deg: 100.0     # 左右扇区外边界
+    max_range: 12.0
+    range_min: 0.12
+    range_max: 20.0
+
 imu_state_node:
   ros__parameters:
     imu_topic: /imu/data
@@ -54,21 +103,29 @@ avoidance_controller:
     vlm_topic: /perception/vlm/result
     sector_topic: /perception/sectors/result
     imu_state_topic: /state/imu
+    scan_sector_topic: /perception/scan_sectors
+    odom_topic: /odom
+    goal_topic: /goal_pose
+    plan_topic: /plan
+    waypoint_tolerance: 0.35
+    odom_timeout: 0.5
+    fallback_odom_topic: /wheel_odom   # SLAM 位姿断了就用它兜底（限速）
+    fallback_speed_scale: 0.6
     status_topic: /vlm_avoid/status
     publish_rate_hz: 20.0
     enable: true
     require_imu: false          # 真机建议 true：IMU 不在线就不许动
 
     # --- 速度 ---
-    max_linear: 0.45
-    cruise_linear: 0.35
+    max_linear: 0.8
+    cruise_linear: 0.7
     creep_linear: 0.12
-    max_angular: 1.20
-    avoid_angular: 0.85
+    max_angular: 1.4
+    avoid_angular: 1.0
 
     # --- 深度安全网 ---
     stop_distance: 0.15
-    slow_distance: 0.80
+    slow_distance: 1.0
     obstacle_distance: 0.35
     release_margin: 0.25
     turn_min_clearance: 0.35
@@ -87,6 +144,15 @@ avoidance_controller:
     unknown_risk: 0.35
     obstacle_risk_threshold: 0.70
     prefer_side: 1
+
+    # --- 目的地导航 ---
+    goal_tolerance: 0.30
+    goal_kp: 1.40
+    goal_max_angular: 0.90
+    goal_slow_angle: 0.90
+    goal_slow_radius: 1.6
+    stuck_recovery_time: 1.4
+    stuck_cooldown: 4.0
 
     # --- 降级 ---
     vlm_stale_timeout: 3.0

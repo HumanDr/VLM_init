@@ -19,6 +19,10 @@ KNOWN = {
     'avoidance_controller': {
         'publish_rate_hz', 'cmd_vel_topic', 'vlm_topic', 'sector_topic',
         'imu_state_topic', 'status_topic', 'enable', 'require_imu',
+        'scan_sector_topic', 'odom_topic', 'goal_topic', 'goal_cancel_topic',
+        'odom_timeout', 'plan_topic', 'waypoint_tolerance',
+        'fallback_odom_topic', 'fallback_speed_scale',
+        'stuck_recovery_time', 'stuck_cooldown',
     },
     'vlm_obstacle_node': {
         'image_topic', 'result_topic', 'annotated_topic', 'vlm_url', 'api_style',
@@ -34,6 +38,22 @@ KNOWN = {
     },
     'imu_state_node': {
         'imu_topic', 'state_topic', 'alpha', 'snap_threshold', 'rate_hz', 'timeout',
+    },
+    'slam_node': {
+        'scan_topic', 'imu_topic', 'wheel_odom_topic', 'odom_topic', 'map_topic',
+        'map_frame', 'base_frame', 'max_range', 'map_publish_period',
+        'keyframe_dist', 'keyframe_angle', 'loop_radius', 'enable_vo',
+        'vo_rate_hz', 'rgb_topic', 'depth_topic', 'camera_info_topic',
+    },
+    'path_planner_node': {
+        'map_file', 'goal_topic', 'goal_cancel_topic', 'odom_topic',
+        'plan_topic', 'map_topic', 'inflation_radius', 'map_offset_x',
+        'map_offset_y', 'replan_period', 'odom_timeout', 'publish_map', 'smooth',
+        'frame_id', 'map_wait_timeout', 'map_preview_topic',
+    },
+    'scan_sectors_node': {
+        'scan_topic', 'result_topic', 'front_angle_deg', 'side_angle_deg',
+        'max_range', 'range_min', 'range_max',
     },
 }
 
